@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+    <title>PMTiles Map over IPFS!</title>
+    <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no'>
+    <script src='https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js'></script>
+    <link href='https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css' rel='stylesheet' />
+    <script src='https://unpkg.com/pmtiles@latest/dist/pmtiles.js'></script>
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+    </style>
+</head>
+<body>
+    <div id='map'></div>
+    <script>
+        // Add PMTiles protocol
+        let protocol = new pmtiles.Protocol();
+        maplibregl.addProtocol("pmtiles", protocol.tile);
+
+        const style = {
+            "version": 8,
+            "sources": {
+                "pmtiles-source": {
+                    "type": "vector",
+                    // CID of the PMTiles map file
+                    "url": "pmtiles://https://bafybeicniezqfo7h3vrnz7eiojzsnwcaf5hnc6oa7rqocnivuxph2e6ubi.ipfs.dweb.link"
+                }
+            },
+            // CID of the fonts directory
+            "glyphs": "https://bafybeicbvngnqkifonewzvzvxtxccrpzvvzs3sgttjdfu3seorpoijk2gi.ipfs.dweb.link/{fontstack}/{range}.pbf",
+            "layers": [
+                {
+                    "id": "background",
+                    "type": "background",
+                    "paint": {
+                        "background-color": "#f0f8ff"
+                    }
+                },
+                {
+                    "id": "land",
+                    "type": "fill",
+                    "source": "pmtiles-source",
+                    "source-layer": "land",
+                    "paint": {
+                        "fill-color": "#f8f4f0"
+                    }
+                },
+                {
+                    "id": "water",
+                    "type": "fill",
+                    "source": "pmtiles-source",
+                    "source-layer": "water",
+                    "paint": {
+                        "fill-color": "#a0c8f0"
+                    }
+                },
+                {
+                    "id": "places",
+                    "type": "symbol",
+                    "source": "pmtiles-source",
+                    "source-layer": "places",
+                    "layout": {
+                        "text-field": [
+                            "get",
+                            "name"
+                        ],
+                        "text-size": 12,
+                        "text-font": [
+                            "Noto Sans Regular"
+                        ]
+                    },
+                    "paint": {
+                        "text-color": "#333333",
+                        "text-halo-color": "#ffffff",
+                        "text-halo-width": 1
+                    }
+                }
+            ]
+        };
+
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: style,
+            center: [0, 0],
+            zoom: 2
+        });
+    </script>
+</body>
+</html>
