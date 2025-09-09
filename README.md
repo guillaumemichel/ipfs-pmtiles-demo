@@ -5,7 +5,7 @@ Author: [Guillaume Michel](https://github.com/guillaumemichel)
 This demo showcases how to distribute and serve static maps over IPFS using
 PMTiles format, providing a decentralized approach to map hosting.
 
-**🌐 [View Live Demo](https://bafkreifzmh5jypqoffrpr6nzvkvdtsqdkfkzcvcvcnjv7sk4haz3ijsgua.ipfs.dweb.link/)**
+**🌐 [View Live Demo](https://bafkreiclsdmwsgzkitv5g2akcdxugrotppn3mcg6lzukcjyj5cj5aferfy.ipfs.dweb.link/)**
 
 ## Overview
 
@@ -14,7 +14,8 @@ This project demonstrates:
 - [**PMTiles**](https://protomaps.com/): A cloud-optimized format for storing
 map tiles in a single static file.
 - **IPFS Distribution**: Map data served via any [IPFS HTTP
-Gateway](https://docs.ipfs.tech/concepts/ipfs-gateway/).
+Gateway](https://docs.ipfs.tech/concepts/ipfs-gateway/) (public, private or
+local [kubo](https://github.com/ipfs/kubo)).
 - [**MapLibre GL**](https://maplibre.org/maplibre-gl-js/docs/): Rendering
 interactive vector maps in the browser.
 
@@ -93,8 +94,10 @@ services](https://docs.ipfs.tech/how-to/work-with-pinning-services/#use-a-third-
 Example using Kubo:
 
 ```sh
-ipfs add --cid-version=1 data/map.pmtiles
-ipfs add --cid-version=1 -r data/fonts
+$ ipfs add --cid-version=1 data/map.pmtiles
+added bafybeihcqkfxhjnpjqq4b4yjrombqoj2vjcabxeg2miindnzid5zjn7ceu map.pmtiles
+$ ipfs add --cid-version=1 -r data/fonts
+added bafybeigknf3p3vc5eq2q4odydrxhaxv7rtm74y53z3tobajkzdrx4gt4ia fonts
 ```
 
 ### MapLibre Fetching and Rendering
