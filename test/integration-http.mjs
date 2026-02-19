@@ -1,9 +1,9 @@
-// End-to-end over the dumb host: scripts/serve.mjs serving dist/ (both
-// packages), driving the real pmtiles.PMTiles through MapBundle and glyphs
-// through FontBundle with nothing but GET + Range — no IPFS process
-// anywhere. Asserts the request-shape budget (bootstrap = metadata.json +
-// proofs meta + one shard + one range per package flow) and the
-// "no gateway dependence" allowlist.
+// End-to-end over the dumb host: scripts/serve.mjs serving dist/ (all three
+// packages), driving the real pmtiles.PMTiles through MapBundle (map and
+// elevation) and glyphs through FontBundle with nothing but GET + Range —
+// no IPFS process anywhere. Asserts the request-shape budget (bootstrap =
+// metadata.json + proofs meta + one shard + one range per package flow) and
+// the "no gateway dependence" allowlist.
 //
 // Prereq: `node scripts/build.mjs` (assembles dist/). Not part of `npm test`.
 // Usage: node test/integration-http.mjs
@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { PMTiles } from 'pmtiles';
+import { PMTiles, zxyToTileId } from 'pmtiles';
 
 import { parseArchive } from '../scripts/lib/pmtiles-parse.js';
 import { serve } from '../scripts/serve.mjs';
@@ -24,8 +24,10 @@ const distDir = fileURLToPath(new URL('dist/', repo));
 // build asserts they match the freshly built packages, so reading them here is
 // equivalent to trusting the build.
 const indexHtml = await readFile(new URL('index.html', repo), 'utf8');
-const [mapCid, fontsCid] = [...indexHtml.matchAll(/anchor\('([a-z2-7]+)'\)/g)].map((m) => m[1]);
+const [mapCid, fontsCid, elevationCid] =
+  [...indexHtml.matchAll(/anchor\('([a-z2-7]+)'\)/g)].map((m) => m[1]);
 const fileBytes = await readFile(new URL('data/map.pmtiles', repo));
+const elevationBytes = await readFile(new URL('data/elevation.pmtiles', repo));
 
 const server = await serve(distDir, 0);
 const base = `http://127.0.0.1:${server.address().port}`;
@@ -119,6 +121,55 @@ try {
   }
   console.log('sampled tile ranges: byte-identical, one range request per uncached tile');
 
+  // The elevation package bootstraps independently, from its own root CID,
+  // through the same map-package client.
+  mark = fetched.length;
+  const elevation = await MapBundle.open(
+    elevationCid,
+    [{ type: 'range', url: `${base}/ipfs/${elevationCid}` }],
+    { fetchFn },
+  );
+  assert.equal(fetched.length - mark, 1, 'elevation open fetches only metadata.json');
+  console.log('elevation bootstrap trust: metadata.json reconstructed the root CID');
+
+  const dem = new PMTiles(elevation.pmtilesSource());
+  const demHeader = await dem.getHeader();
+  assert.equal(demHeader.maxZoom, 4);
+  assert.equal(demHeader.tileType, 4); // webp
+  console.log(`elevation header via range source: zoom ${demHeader.minZoom}-${demHeader.maxZoom}`);
+
+  // Terrarium webp tiles are stored uncompressed, so getZxy bytes are the
+  // stored range bytes: verify one against the source archive.
+  const demTile = await dem.getZxy(0, 0, 0);
+  assert.ok(demTile?.data?.byteLength > 0, 'elevation tile 0/0/0');
+  const demArchive = parseArchive(elevationBytes);
+  const rootEntry = demArchive.entries.find((e) => e.tileId === 0 && e.runLength > 0);
+  const rootAbs = demArchive.header.tileDataOffset + rootEntry.offset;
+  assert.deepEqual(
+    new Uint8Array(demTile.data),
+    new Uint8Array(elevationBytes.subarray(rootAbs, rootAbs + rootEntry.length)),
+    'elevation tile 0/0/0 byte-identical',
+  );
+  console.log(`elevation tile 0/0/0: ${demTile.data.byteLength} bytes, byte-identical`);
+
+  // A tile absent from the archive (pure-ocean region) resolves to
+  // undefined from the directory alone — the browser protocol turns that
+  // into a rejected tile, never a fetched one.
+  const present = new Set(
+    demArchive.entries.flatMap((e) =>
+      Array.from({ length: e.runLength }, (_, i) => e.tileId + i),
+    ),
+  );
+  let hole;
+  for (let x = 0; x < 16 && hole === undefined; x++) {
+    for (let y = 0; y < 16 && hole === undefined; y++) {
+      if (!present.has(zxyToTileId(4, x, y))) hole = [4, x, y];
+    }
+  }
+  assert.ok(hole, 'expected at least one absent z4 elevation tile');
+  assert.equal(await dem.getZxy(...hole), undefined);
+  console.log(`missing elevation tile ${hole.join('/')}: resolves to undefined`);
+
   // Both shards are on the host; a deep-zoom tile must have pulled the second.
   assert.ok(
     fetched.some((u) => /\/proofs\/[0-9a-f]{16}$/.test(u) && !u.endsWith('/0000000000000000')),
@@ -128,16 +179,17 @@ try {
   // No gateway dependence: every URL stays under the configured bases (the
   // dumb host's ipfs/<rootCID>/ directories — the path names the CID but
   // nothing resolves it), and none uses a gateway API shape.
+  const bases = [mapCid, fontsCid, elevationCid].map((cid) => `${base}/ipfs/${cid}/`);
   for (const url of fetched) {
-    assert.ok(
-      url.startsWith(`${base}/ipfs/${mapCid}/`) || url.startsWith(`${base}/ipfs/${fontsCid}/`),
-      `off-base fetch: ${url}`,
-    );
+    assert.ok(bases.some((b) => url.startsWith(b)), `off-base fetch: ${url}`);
     assert.doesNotMatch(url, /format=raw|\?/, `gateway-shaped fetch: ${url}`);
   }
   console.log(`every one of ${fetched.length} fetches stayed under the bases (zero gateway traffic)`);
 
-  console.log('stats:', JSON.stringify({ map: bundle.stats, fonts: fonts.stats }));
+  console.log(
+    'stats:',
+    JSON.stringify({ map: bundle.stats, elevation: elevation.stats, fonts: fonts.stats }),
+  );
   console.log('OK');
 } finally {
   server.close();

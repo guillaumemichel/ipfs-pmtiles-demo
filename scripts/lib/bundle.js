@@ -1,8 +1,9 @@
 // The reproducible core of the build, extracted so the golden tests can
-// re-derive the same root CIDs. Two independent packages, each a root
+// re-derive the same root CIDs. Two package kinds, each an independent root
 // directory CID a client can bootstrap from:
 //
 //   map package   map.pmtiles (tile-aligned import) + proofs/ tree + metadata.json
+//                 (the demo builds two: the vector map and the elevation)
 //   font package  fonts/ files + one proofs file + metadata.json
 //
 // Pure functions of the input files + installed tool versions — no
@@ -38,20 +39,26 @@ export const FORMAT_VERSION = 2;
 // the golden test so both derive the same fonts root CID.
 export const FONT_SET_PROVENANCE = { source: { assets: 'protomaps/basemaps-assets' } };
 
+// Upstream builds the demo archives were extracted from — shared by the
+// build and the golden tests so both derive the same root CIDs.
+export const MAP_SOURCE_BUILD = 'protomaps 20250902';
+export const ELEVATION_SOURCE_BUILD = 'mapterhorn';
+
 // Every non-map file must be a single raw UnixFS leaf so that its served
 // bytes hash straight to its file CID's digest (the default chunker splits
 // at 256 KiB). Clients rely on this bound to cap whole-file reads.
 const SINGLE_LEAF_MAX = 256 * 1024;
 
 // Map package from a PMTiles archive: parse, assert the tile-aligned shape,
-// import, prove.
-export async function assembleMapBundle({ fileBytes }) {
+// import, prove. `sourceBuild` names the upstream build the archive was
+// extracted from (provenance only — not a trust input).
+export async function assembleMapBundle({ fileBytes, sourceBuild }) {
   const { header, tileRanges } = parseArchive(fileBytes);
   const cuts = computeCutPoints({ header, tileRanges, fileSize: fileBytes.length });
   const dag = await assembleMapDag({
     mapBytes: fileBytes,
     cuts,
-    provenance: mapProvenance(fileBytes, header),
+    provenance: mapProvenance(fileBytes, header, sourceBuild),
   });
   return { header, tileRanges, ...dag };
 }
@@ -168,7 +175,7 @@ async function sealRoot(children, metadataBytes, blockstore) {
 
 // Provenance for humans and tools. No timestamps or machine-specific data:
 // must be identical across rebuilds.
-function mapProvenance(fileBytes, header) {
+function mapProvenance(fileBytes, header, sourceBuild) {
   const internal = JSON.parse(
     gunzipSync(
       fileBytes.subarray(
@@ -181,7 +188,7 @@ function mapProvenance(fileBytes, header) {
     join(repoRoot, 'node_modules/ipfs-unixfs-importer/package.json'),
   ).version;
   return {
-    source: { build: 'protomaps 20250902', maxZoom: header.maxZoom },
+    source: { build: sourceBuild, maxZoom: header.maxZoom },
     attribution: internal.attribution ?? '',
     chunking: {
       strategy: 'tile-aligned',
