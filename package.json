@@ -1,0 +1,21 @@
+{
+  "name": "ipfs-pmtiles-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'",
+    "build": "node scripts/build.mjs",
+    "serve": "node scripts/serve.mjs dist",
+    "test:http": "node test/integration-http.mjs"
+  },
+  "dependencies": {
+    "@ipld/car": "5.4.6",
+    "@ipld/dag-pb": "4.1.7",
+    "blockstore-core": "7.0.1",
+    "ipfs-unixfs": "13.0.0",
+    "ipfs-unixfs-importer": "17.0.1",
+    "multiformats": "14.0.4",
+    "pmtiles": "4.4.1"
+  }
+}

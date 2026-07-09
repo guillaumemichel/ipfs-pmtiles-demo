@@ -2,34 +2,117 @@
 <html>
 <head>
     <meta charset='utf-8'>
-    <title>PMTiles Map over IPFS!</title>
+    <title>Verified PMTiles Map over IPFS!</title>
     <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no'>
-    <script src='https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js'></script>
-    <link href='https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css' rel='stylesheet' />
-    <script src='https://unpkg.com/pmtiles@latest/dist/pmtiles.js'></script>
+    <!-- maplibre + pmtiles: exact versions, SRI-pinned. The importmap deps
+         (multiformats, dag-pb) load from esm.sh by exact version (no SRI —
+         a demo convenience; a bundling consumer of the client would inline
+         these same-origin instead). -->
+    <script src='https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js'
+            integrity='sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp'
+            crossorigin='anonymous'></script>
+    <link href='https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css'
+          integrity='sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK'
+          crossorigin='anonymous' rel='stylesheet' />
+    <script src='https://unpkg.com/pmtiles@4.4.1/dist/pmtiles.js'
+            integrity='sha384-iS2/cbFYol4NsEeda4mW6N/8wPMOT6pv2eY+GNYSJRqVC4nbJECP1+mg6D2T8wT/'
+            crossorigin='anonymous'></script>
+    <script type='importmap'>
+    {
+        "imports": {
+            "multiformats/cid": "https://esm.sh/multiformats@14.0.4/cid",
+            "multiformats/hashes/digest": "https://esm.sh/multiformats@14.0.4/hashes/digest",
+            "@ipld/dag-pb": "https://esm.sh/@ipld/dag-pb@4.1.7"
+        }
+    }
+    </script>
     <style>
         body { margin: 0; padding: 0; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        #badge {
+            position: absolute; top: 10px; right: 10px; z-index: 1;
+            background: rgba(255, 255, 255, 0.9); border-radius: 4px;
+            padding: 6px 10px; font: 13px/1.4 monospace; box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+        }
+        #badge .rejected { color: #c0392b; }
     </style>
 </head>
 <body>
     <div id='map'></div>
-    <script>
-        // Add PMTiles protocol
-        let protocol = new pmtiles.Protocol();
-        maplibregl.addProtocol("pmtiles", protocol.tile);
+    <div id='badge'>loading…</div>
+    <script type='module'>
+        import { FontBundle } from './src/font-bundle.js';
+        import { MapBundle } from './src/map-bundle.js';
+
+        // The two root CIDs are the only trust anchors; each package is served
+        // from ./ipfs/<rootCID>/ next to this page. The path advertises the CID
+        // (for humans and IPFS-aware tools) but carries no trust — verification
+        // uses only the CIDs inlined here. `npm run build` reproduces both from
+        // the data and fails if they drift, so they can't go stale.
+        const anchor = (rootCid) => ({ rootCid, sources: [{ type: 'range', url: `ipfs/${rootCid}` }] });
+        const config = {
+            map:   anchor('bafybeidromswvzgmm4hwagh6yn3ktbf2wajgfmt3zcqkt4oofmqw4wfkja'),
+            fonts: anchor('bafybeigowai2gpk2sutzzsnnjt6hucdh7atuugoyfhjt3hbc2o3hkbjjbu'),
+        };
+
+        // ?source=<host> / ?fonts=<host> try another host first for the
+        // map / font package (falling back to the configured one). The host
+        // publishes the standard ipfs/<rootCID>/ layout — any IPFS gateway
+        // or dist/ mirror — and the path is appended here from the trusted
+        // CID, never taken from the URL.
+        // ?tamper=1 corrupts a deterministic ~1/6 of the range (tile)
+        // responses — keyed by byte offset, sparing the bootstrap run and
+        // every plain GET (metadata.json, proofs, fonts) — to show that
+        // tampered tiles are rejected, never rendered.
+        const params = new URLSearchParams(location.search);
+        const tamper = params.has('tamper');
+        const sources = (pkg, key) => params.has(key)
+            ? [{ type: 'range', url: `${params.get(key).replace(/\/+$/, '')}/ipfs/${pkg.rootCid}` }, ...pkg.sources]
+            : pkg.sources;
+
+        // Deterministic per-tile: the same byte offset always corrupts (or
+        // not), so a retry / failover cannot mask it. Offset 0 is the bootstrap
+        // run and is always spared so the map still comes up.
+        const corruptTile = (start) =>
+            start !== 0 && (Math.imul(start, 2654435761) >>> 0) % 6 === 0;
+        const tamperFetch = async (url, opts = {}) => {
+            const res = await fetch(url, opts);
+            const range = opts.headers?.Range; // plain GETs (proofs, fonts) untouched
+            if (!res.ok || !range) return res;
+            const start = Number(/bytes=(\d+)-/.exec(range)?.[1]);
+            if (!corruptTile(start)) return res;
+            const bytes = new Uint8Array(await res.arrayBuffer());
+            if (bytes.length > 0) bytes[0] ^= 0xff;
+            return new Response(bytes, { status: 206 });
+        };
+        const fetchFn = tamper ? tamperFetch : undefined;
+
+        // Two independent packages, one root CID each: the map (tiles +
+        // range proofs) and the fonts (glyphs + one proofs file) — any map
+        // can be paired with any font package.
+        const [mapBundle, fontBundle] = await Promise.all([
+            MapBundle.open(config.map.rootCid, sources(config.map, 'source'), { fetchFn }),
+            FontBundle.open(config.fonts.rootCid, sources(config.fonts, 'fonts'), { fetchFn }),
+        ]);
+        window.bundles = { map: mapBundle, fonts: fontBundle }; // console access
+
+        // Order matters: protocol.add must run before the map requests
+        // pmtiles://<key>, or the key is treated as a fetchable URL.
+        const protocol = new pmtiles.Protocol();
+        maplibregl.addProtocol('pmtiles', protocol.tile);
+        protocol.add(new pmtiles.PMTiles(mapBundle.pmtilesSource()));
+        maplibregl.addProtocol('verified', fontBundle.protocolHandler());
 
         const style = {
             "version": 8,
             "sources": {
                 "pmtiles-source": {
                     "type": "vector",
-                    // CID of the PMTiles map file
-                    "url": "pmtiles://https://bafybeihcqkfxhjnpjqq4b4yjrombqoj2vjcabxeg2miindnzid5zjn7ceu.ipfs.dweb.link"
+                    // Root CID of the verified map package
+                    "url": "pmtiles://" + config.map.rootCid
                 }
             },
-            // CID of the fonts directory
-            "glyphs": "https://bafybeigknf3p3vc5eq2q4odydrxhaxv7rtm74y53z3tobajkzdrx4gt4ia.ipfs.dweb.link/{fontstack}/{range}.pbf",
+            "glyphs": "verified://{fontstack}/{range}.pbf",
             "layers": [
                 {
                     "id": "background",
@@ -85,6 +168,43 @@
             style: style,
             center: [0, 0],
             zoom: 2
+        });
+
+        const badge = document.getElementById('badge');
+        let diagnostic = '';
+        let withheld = 0; // tiles that failed to fetch without a verification reject
+        setInterval(() => {
+            if (diagnostic) { badge.innerHTML = diagnostic; return; }
+            const verified = mapBundle.stats.verified + fontBundle.stats.verified;
+            const rejected = mapBundle.stats.rejected + fontBundle.stats.rejected;
+            // Withheld vs tampered surface differently: a rejected hash is a
+            // tamper; a withheld response is a fetch failure.
+            badge.innerHTML = `✓ ${verified} hashes verified` +
+                (rejected ? ` / <span class="rejected">✗ ${rejected} tampered</span>` : '') +
+                (withheld ? ` / <span class="rejected">⚠ ${withheld} unavailable</span>` : '');
+        }, 500);
+
+        const findError = (err, name, depth = 0) => {
+            if (!err || depth > 6) return null;
+            if (err.name === name) return err;
+            for (const e of err.errors ?? []) {
+                const found = findError(e, name, depth + 1);
+                if (found) return found;
+            }
+            return findError(err.cause, name, depth + 1);
+        };
+        map.on('error', (e) => {
+            const err = e?.error;
+            // A ranged fetch rejecting with TypeError after metadata.json loaded
+            // is a CORS-preflight block (Firefox + a host that can't allow
+            // Range): surface the exact diagnosis instead of a blank map.
+            if (findError(err, 'RangeBlockedError')) {
+                diagnostic = '<span class="rejected">✗ host refuses cross-origin range ' +
+                    'requests in this browser</span>';
+            } else if (findError(err, 'AggregateError') && !findError(err, 'VerificationError')) {
+                // A source failure with no verification reject = withholding.
+                withheld++;
+            }
         });
     </script>
 </body>
