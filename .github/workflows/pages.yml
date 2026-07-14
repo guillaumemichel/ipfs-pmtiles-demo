@@ -1,6 +1,7 @@
 # Build the demo and publish it to GitHub Pages. Only source is committed;
-# the served site (dist/ — page, client, and the two verified data packages)
-# is produced here on every push to main and deployed as-is (no Jekyll).
+# the served site (dist/ — page, client, and the three verified data
+# packages) is produced here on every push to main and deployed as-is (no
+# Jekyll).
 name: Deploy demo to GitHub Pages
 
 on:

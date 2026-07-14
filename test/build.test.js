@@ -16,7 +16,13 @@ import { ProofIndex } from '../src/proof-index.js';
 import { RangeSource } from '../src/range-source.js';
 import { toHex } from '../src/verify.js';
 import { VerifiedStore } from '../src/verified-store.js';
-import { assembleFontBundle, assembleMapBundle, FONT_SET_PROVENANCE } from '../scripts/lib/bundle.js';
+import {
+  assembleFontBundle,
+  assembleMapBundle,
+  ELEVATION_SOURCE_BUILD,
+  FONT_SET_PROVENANCE,
+  MAP_SOURCE_BUILD,
+} from '../scripts/lib/bundle.js';
 import { parseArchive } from '../scripts/lib/pmtiles-parse.js';
 import { rangeFetch } from './helpers.js';
 
@@ -24,14 +30,24 @@ const GOLDEN_MAP_ROOT_CID = 'bafybeidromswvzgmm4hwagh6yn3ktbf2wajgfmt3zcqkt4oofm
 const GOLDEN_FILE_CID = 'bafybeigulyyqowdlgyepgnw3ido3ewz7skb5dghs3atcnzvinsjnbtvfvm';
 const GOLDEN_META_DIGEST = 'b0776b07b122eb11d916c51afa57fffee3142a6bd5de11551a57ee34081da1f4';
 const GOLDEN_FONTS_ROOT_CID = 'bafybeigowai2gpk2sutzzsnnjt6hucdh7atuugoyfhjt3hbc2o3hkbjjbu';
+const GOLDEN_ELEVATION_ROOT_CID = 'bafybeiada7qldt23a74cclrstwpnckmlkn6crweic3morp6gaiu7qle4dq';
+const GOLDEN_ELEVATION_FILE_CID = 'bafybeiepeifqnixd73lijrdq4j7f5vgzcff6yj5f2hhxb7uxffjvsml5lu';
+const GOLDEN_ELEVATION_META_DIGEST =
+  '90b87d5b778fa082fe3f587bb623a793c261a53614a8f06fe41275fe09d24a56';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fileBytes = await readFile(join(repo, 'data/map.pmtiles'));
 const { header, entries, tileRanges } = parseArchive(fileBytes);
+const elevationBytes = await readFile(join(repo, 'data/elevation.pmtiles'));
+const elevationArchive = parseArchive(elevationBytes);
 
-// One assembly per package shared across the golden assertions (the map is
-// a full ~44 MB import).
-const map = await assembleMapBundle({ fileBytes });
+// One assembly per package shared across the golden assertions (the map and
+// elevation archives are full ~44 MB / ~62 MB imports).
+const map = await assembleMapBundle({ fileBytes, sourceBuild: MAP_SOURCE_BUILD });
+const elevation = await assembleMapBundle({
+  fileBytes: elevationBytes,
+  sourceBuild: ELEVATION_SOURCE_BUILD,
+});
 const fonts = await assembleFontBundle({
   fontsDir: join(repo, 'data/fonts'),
   provenance: FONT_SET_PROVENANCE,
@@ -66,6 +82,57 @@ test('assembleMapBundle reproduces the golden CIDs', () => {
 test('assembleFontBundle reproduces the golden root CID', () => {
   assert.equal(fonts.fontFiles.length, 256);
   assert.equal(fonts.root.cid.toString(), GOLDEN_FONTS_ROOT_CID);
+});
+
+test('elevation archive facts match the measured anatomy', () => {
+  const { header: h, entries: e, tileRanges: t } = elevationArchive;
+  assert.equal(elevationBytes.length, 61_961_078);
+  assert.equal(h.rootDirectoryLength, 942);
+  assert.equal(h.tileDataOffset, 1160);
+  assert.equal(h.leafDirectoryLength, 0);
+  assert.equal(h.clustered, true);
+  assert.equal(h.tileType, 4); // webp terrarium raster-dem tiles
+  assert.equal(h.maxZoom, 4);
+  assert.equal(e.length, 304);
+  assert.equal(t.length, 299);
+});
+
+test('assembleMapBundle reproduces the golden elevation CIDs', () => {
+  assert.equal(elevation.mapEntry.cid.toString(), GOLDEN_ELEVATION_FILE_CID);
+  assert.equal(elevation.root.cid.toString(), GOLDEN_ELEVATION_ROOT_CID);
+});
+
+test('the elevation proofs tree is 1 shard + 1 meta, under the cap', () => {
+  assert.equal(elevation.proofTree.shardCount, 1);
+  assert.equal(elevation.proofTree.files.length, 2);
+  for (const f of elevation.proofTree.files) {
+    assert.ok(f.content.length <= 64 * 1024, `${f.path}: ${f.content.length} B over cap`);
+  }
+  assert.equal(
+    createHash('sha256').update(elevation.proofTree.topMeta).digest('hex'),
+    GOLDEN_ELEVATION_META_DIGEST,
+  );
+});
+
+test('the elevation client bootstraps from rootCID + metadata.json alone', async () => {
+  const served = new Map([
+    ['metadata.json', elevation.metadataBytes],
+    ...elevation.proofTree.files.map((f) => [`proofs/${f.path}`, f.content]),
+  ]);
+  const store = new VerifiedStore([new RangeSource('.', { fetchFn: rangeFetch(served) })]);
+  const manifest = await openMapManifest(GOLDEN_ELEVATION_ROOT_CID, store);
+  assert.equal(manifest.mapSize, 61_961_078);
+  assert.equal(manifest.proofsMetaDigest, GOLDEN_ELEVATION_META_DIGEST);
+
+  const index = new ProofIndex(store, {
+    dir: manifest.proofsDir,
+    metaDigest: manifest.proofsMetaDigest,
+    fileSize: manifest.mapSize,
+  });
+  const recovered = await index.leavesFor(0, manifest.mapSize);
+  assert.equal(recovered.length, elevation.leaves.length);
+  const covered = recovered.reduce((n, l) => n + l.length, 0);
+  assert.equal(covered, manifest.mapSize);
 });
 
 test('the proofs tree is 2 shards + 1 meta, every file under the cap', () => {

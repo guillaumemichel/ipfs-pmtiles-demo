@@ -3,7 +3,8 @@
 Author: [Guillaume Michel](https://github.com/guillaumemichel)
 
 This demo showcases how to distribute and serve static maps over IPFS using
-PMTiles format, providing a decentralized approach to map hosting.
+PMTiles format, providing a decentralized approach to map hosting — rendered
+as a globe with verified 3D terrain.
 
 **🌐 [View Live Demo](https://guillaumemichel.github.io/ipfs-pmtiles-demo/)** —
 built from this repo by CI and served by GitHub Pages, a "dumb host" that only
@@ -24,7 +25,9 @@ This project demonstrates:
   (public, private or local [kubo](https://github.com/ipfs/kubo)) — while
   the browser verifies every byte against the root CID.
 - [**MapLibre GL**](https://maplibre.org/maplibre-gl-js/docs/): Rendering
-  interactive vector maps in the browser.
+  interactive vector maps in the browser, with globe projection and 3D
+  terrain built from a verified [Mapterhorn](https://mapterhorn.com)
+  elevation package.
 
 ## Benefits of IPFS for Serving Map Tiles
 
@@ -45,20 +48,23 @@ This project demonstrates:
 1. **PMTiles File**: The entire map dataset is stored in a single `.pmtiles`
    file, which contains vector tiles optimized for web delivery using [HTTP
    range requests](https://en.wikipedia.org/wiki/Byte_serving).
-2. **Two Verified Packages**: The build emits two independent, individually
-   verifiable packages — a **map package** (the archive + range proofs) and a
-   **font package** (glyph files + one digest per file). Fonts are
-   map-independent: one font package serves any number of maps, and any map
-   can be paired with any font package.
-3. **IPFS Pinning**: Each package is one root CID; pinning either makes it
-   accessible to any IPFS node.
-4. **Fetching Tiles**: Map tiles and fonts are fetched in the browser on demand
-   using HTTP range requests — by default from the same static host that
-   serves the page, or from any other host (an S3 bucket, a range-capable
-   IPFS gateway like [`dweb.link`](https://dweb.link)) via the `?source=` and
-   `?fonts=` flags.
-5. **Client-Side Rendering**: MapLibre GL renders the map using the PMTiles
-   protocol, verifying every byte against the two root CIDs.
+2. **Three Verified Packages**: The build emits three independent,
+   individually verifiable packages — a **map package** (the vector archive +
+   range proofs), an **elevation package** (a raster-dem PMTiles archive +
+   range proofs — the same package kind as the map), and a **font package**
+   (glyph files + one digest per file). Fonts are map-independent: one font
+   package serves any number of maps, and any map can be paired with any
+   font package.
+3. **IPFS Pinning**: Each package is one root CID; pinning any of them makes
+   it accessible to any IPFS node.
+4. **Fetching Tiles**: Map tiles, elevation tiles and fonts are fetched in the
+   browser on demand using HTTP range requests — by default from the same
+   static host that serves the page, or from any other host (an S3 bucket, a
+   range-capable IPFS gateway like [`dweb.link`](https://dweb.link)) via the
+   `?source=`, `?elevation=` and `?fonts=` flags.
+5. **Client-Side Rendering**: MapLibre GL renders the map as a globe with 3D
+   terrain and hillshading using the PMTiles protocol, verifying every byte
+   against the three root CIDs.
 
 ### Data
 
@@ -71,7 +77,7 @@ format](https://maps.protomaps.com/builds/), from which [specific zoom levels
 can be extracted](https://docs.protomaps.com/pmtiles/cli#extract).
 
 In order to keep the demo lightweight, we only extracted zoom levels `0` to `6`
-into [`map.pmtiles`](/data/map.pmtiles) (`44MiB`).
+into [`map.pmtiles`](/data/map.pmtiles) (`42MiB`).
 
 [map.pmtiles](/data/map.pmtiles) was extracted using [`pmtiles
 cli`](https://docs.protomaps.com/pmtiles/cli):
@@ -79,6 +85,20 @@ cli`](https://docs.protomaps.com/pmtiles/cli):
 ```sh
 pmtiles extract https://build.protomaps.com/20250902.pmtiles map.pmtiles --maxzoom=6
 ```
+
+#### Elevation
+
+[Mapterhorn](https://mapterhorn.com) distributes global elevation data as
+PMTiles archives of 512 px terrarium-encoded WebP raster-dem tiles, from
+which [`elevation.pmtiles`](/data/elevation.pmtiles) (`59MiB`) was extracted:
+
+```sh
+pmtiles extract planet.pmtiles elevation.pmtiles --maxzoom=4
+```
+
+Zoom levels `0` to `4` keep the demo lightweight (`z0-6` would be `822MiB`);
+MapLibre oversamples the `z4` tiles at deeper zooms, so terrain and
+hillshading stay on all the way in — just softer.
 
 #### Fonts
 
@@ -88,9 +108,9 @@ ProtoMaps
 
 ### IPFS Pinning
 
-The map and font packages need to be pinned to IPFS, so that they can later
-be discovered and fetched by the browser. Each package is identified by the
-root CID that the client is configured with.
+The map, elevation and font packages need to be pinned to IPFS, so that they
+can later be discovered and fetched by the browser. Each package is
+identified by the root CID that the client is configured with.
 
 > [!NOTE]
 > Remember that you cannot _upload_ content to IPFS, the data must be
@@ -103,8 +123,9 @@ services](https://docs.ipfs.tech/how-to/work-with-pinning-services/#use-a-third-
 The build writes one CAR per package; example using Kubo:
 
 ```sh
-$ ipfs dag import build/map.car     # pins the map package root
-$ ipfs dag import build/fonts.car   # pins the font package root
+$ ipfs dag import build/map.car        # pins the map package root
+$ ipfs dag import build/elevation.car  # pins the elevation package root
+$ ipfs dag import build/fonts.car      # pins the font package root
 ```
 
 ### MapLibre Fetching and Rendering
@@ -126,14 +147,19 @@ The demo uses a simple HTML page (`index.html`) that:
    - Vector source `pmtiles://<map root CID>`, served by a verifying `Source`
      that range-fetches tile bytes from a dumb static host and checks every
      block hash (see [How Verification Works](#how-verification-works)).
+   - Terrain and hillshade raster-dem sources served through an
+     `elevation://` MapLibre protocol backed by the elevation package's own
+     verifying `Source` (a tile absent from the archive — pure ocean —
+     rejects, which MapLibre renders as sea level).
    - Font glyphs resolved through the font package's own root CID via a
      `verified://` MapLibre protocol.
-   - Most basic styling layers for land, water, and place labels
+   - Globe projection with a sky/atmosphere fading out at higher zooms
+   - Most basic styling layers for hillshading, land, water, and place labels
 
-4. **Renders Interactive Map**:
-   - Centered at [0, 0] with zoom level 2
-   - Supports standard map interactions (pan, zoom, etc.), loading tiles on
-     demand from IPFS
+4. **Renders Interactive Globe**:
+   - Centered at [0, 20] with zoom level 1.5 and 2× terrain exaggeration
+   - Supports standard map interactions (pan, zoom, pitch, etc.), loading
+     tiles on demand from IPFS
 
 ### Offline Maps
 
@@ -149,18 +175,19 @@ provider.
 
 After the content is cached locally the map can be loaded offline from the
 browser using IPFS Companion. Note that in the current state, Kubo fetches the
-entire map and fonts.
+entire map, elevation and fonts.
 
 ## How Verification Works
 
-Every byte the browser renders is verifiable against one of two root CIDs —
-one for the map package, one for the font package — and **everything needed
-to verify ships inside each published directory itself**: `ipfs get
-<rootCID>` produces a package that any static file host can serve and any
-client can verify:
+Every byte the browser renders is verifiable against one of three root CIDs
+— one for the map package, one for the elevation package (the same package
+kind as the map, holding a raster-dem archive), one for the font package —
+and **everything needed to verify ships inside each published directory
+itself**: `ipfs get <rootCID>` produces a package that any static file host
+can serve and any client can verify:
 
 ```sh
-📁 map package / (root CID — the only thing the map client must trust)
+📁 map / elevation package / (root CID — the only thing the map client must trust)
 ├─ 🗺️ map.pmtiles     (tile-aligned UnixFS DAG, bytes unchanged)
 ├─ 📄 metadata.json   (bootstrap manifest: sibling CIDs, sizes, proof digest)
 └─ 📁 proofs/         (hashes of every tile-aligned byte range of the map)
@@ -190,7 +217,8 @@ larger scales, nested subdirectories) that are fetched only when browsed.
    require the rebuilt node's CID to **equal the configured root CID**. One
    hash comparison now authenticates every value in the manifest.
 
-Both packages bootstrap this way; they differ only in what hangs below:
+All three packages bootstrap this way (elevation follows the map flow); the
+two package kinds differ only in what hangs below:
 
 3. Map: fetch `proofs/meta` (digest pinned by the manifest), then, lazily,
    the shard covering each requested byte range (digest pinned by `meta`);
@@ -221,24 +249,25 @@ npm ci
 node scripts/build.mjs          # --pin additionally imports + byte-verifies via Kubo
 ```
 
-The build parses the archive, asserts it is clustered and deduplicated,
-re-imports it with tile-aligned cut points, and then:
+The build parses the map and elevation archives, asserts each is clustered
+and deduplicated, re-imports each with tile-aligned cut points, and then:
 
-- packs the map's leaf digests into `proofs/` shards (≤ 64 KiB each) plus
-  their `meta` index, and all font digests into the font package's `proofs`;
+- packs each archive's leaf digests into `proofs/` shards (≤ 64 KiB each)
+  plus their `meta` index, and all font digests into the font package's
+  `proofs`;
 - generates each package's `metadata.json` last, from the sibling CIDs it
   must attest;
-- writes `build/map.car` and `build/fonts.car` (all blocks — the
-  IPFS-publication artifacts, one root CID each);
+- writes `build/map.car`, `build/elevation.car` and `build/fonts.car` (all
+  blocks — the IPFS-publication artifacts, one root CID each);
 - assembles **`dist/`** — a complete, self-contained static site: the page
-  (`index.html`), the client (`src/`), and the two data packages, each under
-  `dist/ipfs/<rootCID>/`, byte-identical to what `ipfs get <rootCID>`
+  (`index.html`), the client (`src/`), and the three data packages, each
+  under `dist/ipfs/<rootCID>/`, byte-identical to what `ipfs get <rootCID>`
   yields;
 - re-reads the bootstrap, sample tiles and a glyph back through the real
   client resolvers over an in-process dumb host, asserting byte-identity;
-- asserts the two root CIDs inlined in `index.html` match the freshly built
-  packages — the demo carries its trust anchors inline (no `config.json`),
-  and this guard fails the build if they ever drift.
+- asserts the three root CIDs inlined in `index.html` match the freshly
+  built packages — the demo carries its trust anchors inline (no
+  `config.json`), and this guard fails the build if they ever drift.
 
 The build is deterministic — same inputs and tool versions yield the same
 root CIDs _and_ the same proof bytes — guarded by golden tests.
@@ -290,6 +319,7 @@ npm run test:http              # end-to-end over the dumb host (needs dist/); ze
   any IPFS gateway (`?source=https://dweb.link`, or
   `?source=http://127.0.0.1:8081` for a local Kubo) or any mirror of
   `dist/`.
+- `?elevation=<host>` — same, for the **elevation** package.
 - `?fonts=<host>` — same, for the **font** package.
 - `?tamper=1` — corrupt a deterministic ~1/6 of tile range responses (sparing
   the bootstrap and every plain GET: `metadata.json`, proofs, fonts) to

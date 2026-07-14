@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-// Build the two verified packages — the map (tile-aligned UnixFS DAG over
-// map.pmtiles + proofs/ tree + metadata.json) and the fonts (glyph files +
-// one proofs file + metadata.json) — each under its own root directory CID,
-// each servable by any static host or any range-capable IPFS gateway, and
-// each written to a CAR for pinning. Fonts ship separately so one font
-// package can serve any number of maps.
+// Build the three verified packages — the map and the elevation archives
+// (each a tile-aligned UnixFS DAG over its .pmtiles file + proofs/ tree +
+// metadata.json) and the fonts (glyph files + one proofs file +
+// metadata.json) — each under its own root directory CID, each servable by
+// any static host or any range-capable IPFS gateway, and each written to a
+// CAR for pinning. Fonts ship separately so one font package can serve any
+// number of maps.
 import { execFileSync } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { cp, copyFile, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
@@ -13,7 +14,13 @@ import { fileURLToPath } from 'node:url';
 
 import { FontBundle } from '../src/font-bundle.js';
 import { MapBundle } from '../src/map-bundle.js';
-import { assembleFontBundle, assembleMapBundle, FONT_SET_PROVENANCE } from './lib/bundle.js';
+import {
+  assembleFontBundle,
+  assembleMapBundle,
+  ELEVATION_SOURCE_BUILD,
+  FONT_SET_PROVENANCE,
+  MAP_SOURCE_BUILD,
+} from './lib/bundle.js';
 import { writeCar } from './lib/dag-build.js';
 import { directoryFetch } from './lib/local-fetch.js';
 
@@ -24,16 +31,26 @@ const distDir = join(repoRoot, 'dist');
 
 async function main() {
   const mapPath = join(dataDir, 'map.pmtiles');
+  const elevationPath = join(dataDir, 'elevation.pmtiles');
   const fileBytes = await readFile(mapPath);
+  const elevationBytes = await readFile(elevationPath);
 
-  // 1. Assemble both packages (see scripts/lib/bundle.js).
-  const map = await assembleMapBundle({ fileBytes });
-  verifyLeafReassembly(map.leaves, map.blockstore, fileBytes);
-  console.log(`${map.tileRanges.length} unique tile ranges; map CID ${map.mapEntry.cid}`);
-  const proofBytes = map.proofTree.files.reduce((n, f) => n + f.content.length, 0);
-  console.log(
-    `proofs/: ${map.proofTree.shardCount} shards, ${map.proofTree.files.length} files, ${proofBytes} bytes`,
-  );
+  // 1. Assemble the three packages (see scripts/lib/bundle.js). The map and
+  // elevation archives are the same package kind — one verified range-
+  // readable file each — built from different upstream sources.
+  const map = await assembleMapBundle({ fileBytes, sourceBuild: MAP_SOURCE_BUILD });
+  const elevation = await assembleMapBundle({
+    fileBytes: elevationBytes,
+    sourceBuild: ELEVATION_SOURCE_BUILD,
+  });
+  for (const [name, pkg, bytes] of [['map', map, fileBytes], ['elevation', elevation, elevationBytes]]) {
+    verifyLeafReassembly(pkg.leaves, pkg.blockstore, bytes);
+    console.log(`${name}: ${pkg.tileRanges.length} unique tile ranges; file CID ${pkg.mapEntry.cid}`);
+    const proofBytes = pkg.proofTree.files.reduce((n, f) => n + f.content.length, 0);
+    console.log(
+      `${name} proofs/: ${pkg.proofTree.shardCount} shards, ${pkg.proofTree.files.length} files, ${proofBytes} bytes`,
+    );
+  }
 
   const fonts = await assembleFontBundle({
     fontsDir: join(dataDir, 'fonts'),
@@ -44,7 +61,7 @@ async function main() {
   // 2. One CAR per package (all blocks) — the IPFS-publication + pin
   // artifacts.
   await mkdir(outDir, { recursive: true });
-  for (const [name, pkg] of [['map', map], ['fonts', fonts]]) {
+  for (const [name, pkg] of [['map', map], ['elevation', elevation], ['fonts', fonts]]) {
     const carPath = join(outDir, `${name}.car`);
     await writeCarFile(pkg.root.cid, pkg.blockstore.blocks, carPath);
     console.log(`wrote ${relative(repoRoot, carPath)} (${pkg.blockstore.blocks.size} blocks)`);
@@ -53,32 +70,43 @@ async function main() {
   // 3. Optional byte-identity check via Kubo (IPFS publication stays
   // possible, same root CIDs — but nothing in the serving path needs it).
   if (process.argv.includes('--pin')) {
-    pinAndVerify(map.mapEntry.cid, mapPath);
+    pinAndVerify([
+      ['map', map.mapEntry.cid, mapPath],
+      ['elevation', elevation.mapEntry.cid, elevationPath],
+    ]);
   } else {
     console.log('skipping Kubo import (pass --pin to import + byte-verify)');
   }
 
   // 4. Assemble dist/ — a complete, self-contained static site: the page and
-  // client code alongside the two data packages, each published under
+  // client code alongside the three data packages, each published under
   // ipfs/<rootCID>/ (exactly what `ipfs get <rootCID>` would produce; the
   // CID in the path is a legibility/interop convention, not a trust input).
   // This whole directory is what gets published (locally via `npm run
   // serve`, or by the Pages workflow).
   const mapDist = join(distDir, 'ipfs', map.root.cid.toString());
+  const elevationDist = join(distDir, 'ipfs', elevation.root.cid.toString());
   const fontsDist = join(distDir, 'ipfs', fonts.root.cid.toString());
   await rm(distDir, { recursive: true, force: true });
   await assembleMapDist(mapDist, map, mapPath);
+  await assembleMapDist(elevationDist, elevation, elevationPath);
   await assembleFontDist(fontsDist, fonts);
-  await assembleSite(distDir, map.root.cid.toString(), fonts.root.cid.toString());
-  console.log(`assembled ${relative(repoRoot, distDir)}/ (page + client + map + fonts)`);
+  await assembleSite(distDir, {
+    map: map.root.cid.toString(),
+    elevation: elevation.root.cid.toString(),
+    fonts: fonts.root.cid.toString(),
+  });
+  console.log(`assembled ${relative(repoRoot, distDir)}/ (page + client + map + elevation + fonts)`);
 
-  // 5. Prove dist/ serves both packages through the real client resolvers
+  // 5. Prove dist/ serves every package through the real client resolvers
   // over an in-process dumb host — nothing but GET + Range.
   await verifyMapRoundTrip(mapDist, map, fileBytes);
+  await verifyMapRoundTrip(elevationDist, elevation, elevationBytes);
   await verifyFontRoundTrip(fontsDist, fonts);
   console.log('dist/ round-trip: bootstrap + tiles + glyph byte-identical via the client');
 
   console.log(`MAP_ROOT_CID ${map.root.cid}`);
+  console.log(`ELEVATION_ROOT_CID ${elevation.root.cid}`);
   console.log(`FONTS_ROOT_CID ${fonts.root.cid}`);
 }
 
@@ -86,10 +114,12 @@ async function main() {
 // index.html's inlined root CIDs match the freshly built ones — the drift
 // guard that lets the demo carry its trust anchors inline instead of fetching
 // a config file.
-async function assembleSite(distDir, mapCid, fontsCid) {
+async function assembleSite(distDir, cids) {
   const indexHtml = await readFile(join(repoRoot, 'index.html'), 'utf8');
-  for (const [label, cid] of [['map', mapCid], ['fonts', fontsCid]]) {
-    if (!indexHtml.includes(cid)) {
+  for (const [label, cid] of Object.entries(cids)) {
+    // Anchor the CID to its config key: with two same-kind packages, a bare
+    // includes() would not catch a map/elevation swap.
+    if (!new RegExp(`${label}:\\s*anchor\\('${cid}'\\)`).test(indexHtml)) {
       throw new Error(
         `index.html is missing the current ${label} root CID ${cid} — ` +
           `update the inlined config in index.html to match this build`,
@@ -181,16 +211,20 @@ function verifyLeafReassembly(leaves, blockstore, fileBytes) {
   }
 }
 
-function pinAndVerify(fileCid, mapPath) {
-  for (const name of ['map', 'fonts']) {
+// Import every package CAR, then byte-verify each archive ([name, fileCid,
+// filePath]) through ipfs cat.
+function pinAndVerify(archives) {
+  for (const name of ['map', 'elevation', 'fonts']) {
     console.log(`importing ${name}.car into Kubo...`);
     execFileSync('ipfs', ['dag', 'import', join(outDir, `${name}.car`)], { stdio: 'inherit' });
   }
-  console.log('verifying byte identity via ipfs cat...');
-  execFileSync('sh', ['-c', `ipfs cat ${fileCid} | cmp - "${mapPath}"`], {
-    stdio: 'inherit',
-  });
-  console.log('ipfs cat output is byte-identical to data/map.pmtiles');
+  for (const [name, fileCid, filePath] of archives) {
+    console.log(`verifying ${name} byte identity via ipfs cat...`);
+    execFileSync('sh', ['-c', `ipfs cat ${fileCid} | cmp - "${filePath}"`], {
+      stdio: 'inherit',
+    });
+    console.log(`ipfs cat output is byte-identical to ${relative(repoRoot, filePath)}`);
+  }
 }
 
 await main();
