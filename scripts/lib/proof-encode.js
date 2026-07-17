@@ -1,6 +1,6 @@
-// Build-side encoders for the binary proof formats. The decoders — the only
-// half the browser ships — live in src/proof-format.js together with the
-// format constants and record layouts these encoders must match.
+// Build-side encoders for the map-package proof format. The decoder half now
+// ships in the veritiles library (VerifiedSource); the format constants and
+// record layouts these encoders must match live in ./proof-format.js.
 import {
   DIGEST_LENGTH,
   KIND_DIR,
@@ -8,7 +8,7 @@ import {
   MAX_SHARD_RECORDS,
   META_RECORD_SIZE,
   SHARD_RECORD_SIZE,
-} from '../../src/proof-format.js';
+} from './proof-format.js';
 
 // leaves: [{offset, digest(Uint8Array 32)}] in file order, absolute offsets;
 // startOffset is the shard's start (its filename).
@@ -55,24 +55,6 @@ export function encodeMeta(entries) {
   return out;
 }
 
-// records: [{path, digest(Uint8Array 32)}]; sorted here for determinism.
-export function encodeFontProofs(records) {
-  const encoder = new TextEncoder();
-  const sorted = [...records].sort((a, b) => (a.path < b.path ? -1 : 1));
-  let prev = '';
-  return concatRecords(
-    sorted.map(({ path, digest }) => {
-      if (typeof path !== 'string' || path.length === 0) throw new Error('empty path');
-      if (path <= prev) throw new Error(`duplicate path ${path}`);
-      prev = path;
-      assertDigest(digest);
-      const pathBytes = encoder.encode(path);
-      if (pathBytes.length > 0xffff) throw new Error(`path exceeds u16: ${path}`);
-      return [Uint8Array.of(pathBytes.length & 0xff, pathBytes.length >>> 8), pathBytes, digest];
-    }),
-  );
-}
-
 function writeU64LE(out, pos, value) {
   let lo = value % 0x100000000;
   let hi = Math.floor(value / 0x100000000);
@@ -90,16 +72,4 @@ function assertDigest(digest) {
   if (!(digest instanceof Uint8Array) || digest.length !== DIGEST_LENGTH) {
     throw new Error('digest must be 32 bytes');
   }
-}
-
-function concatRecords(records) {
-  const parts = records.flat();
-  const size = parts.reduce((n, p) => n + p.length, 0);
-  const out = new Uint8Array(size);
-  let pos = 0;
-  for (const p of parts) {
-    out.set(p, pos);
-    pos += p.length;
-  }
-  return out;
 }

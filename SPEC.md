@@ -1,23 +1,27 @@
-# Verified Map & Font Packages — Format & Client Protocol
+# Verified Map Packages — Format & Client Protocol
 
-**formatVersion: 2** · Status: implemented; all numbers measured on the demo
-archive (PMTiles, 44,199,060 B, 2,905 leaves) and font set (256 glyph files).
+**formatVersion: 1** · Status: implemented; all numbers measured on the demo
+archive (PMTiles, 44,199,060 B, 2,905 leaves).
+
+> **Fonts and the style are no longer packages.** They are published as
+> **verified assets** and read by the [veritiles](https://github.com/guillaumemichel/veritiles)
+> library (`VerifiedAsset`), whose format and client protocol are normative in
+> [`SPEC.md`](https://github.com/guillaumemichel/veritiles/blob/main/SPEC.md)
+> — a UnixFS directory anchored by a CARv1 proof (glyphs) or a raw ≤ 256 KiB
+> file that self-verifies (style). The **font-package** sections of this
+> document (§2 font layout, §5.3, the §6 font subsection, §9) are **superseded**
+> and kept only for historical reference. The **map package** below is current:
+> veritiles' `VerifiedSource` reads exactly this layout, and its normative
+> home is now [veritiles `SPEC.md`](https://github.com/guillaumemichel/veritiles/blob/main/SPEC.md)
+> too (Part 1, `Mn` sections; assets are Part 2, `An`). This document stays
+> as the build-pipeline companion.
 
 A _package_ is a directory of plain files published on any static host and
 identified by a single IPFS root CID. A client that knows only that CID can
 fetch the package's content and verify every byte it renders, with no trust
-in the host. This document defines two package kinds sharing one trust
-mechanism:
-
-- a **map package** — a range-readable map archive plus the integrity
-  proofs for arbitrary byte ranges of it;
-- a **font package** — glyph files plus one digest per file, fetched whole.
-
-Fonts ship separately from maps because a font set is map-independent: one
-font package serves any number of maps, and any map can be paired with any
-font package. The two kinds differ only in the manifest section they carry
-and the shape of their proofs; bootstrap, verification, transport, and
-caching are the same code.
+in the host. This document defines the **map package** — a range-readable map
+archive plus the integrity proofs for arbitrary byte ranges of it — read in
+the browser by veritiles' `VerifiedSource`.
 
 ## 1. Design goal: optimize for the client, not the server
 
@@ -61,11 +65,17 @@ map package /ipfs/<rootCID>/
    ├─ {hex16}         shard files (§5.1), named by absolute start offset
    └─ {hex16}/        subdirectories (same rule, recursive) at larger scales
 
-font package /ipfs/<rootCID>/
+font package /ipfs/<rootCID>/    ← SUPERSEDED — fonts are now a verified asset
 ├─ metadata.json      bootstrap manifest (§6) — the only unverified fetch
 ├─ proofs             one digest per font file (§5.3)
 └─ fonts/{stack}/{range}.pbf
 ```
+
+The font-package layout above is superseded: glyphs now ship as a plain UnixFS
+directory `ipfs/<fontsRoot>/{stack}/{range}.pbf` with a structure-only proof
+beside it at `ipfs/<fontsRoot>.car`, anchored by the CAR CID
+(veritiles `VerifiedAsset`, veritiles `SPEC.md` Part 2). No `metadata.json`, no flat
+`proofs` file.
 
 `{hex16}` is the 16-digit zero-padded lowercase hex of the **absolute byte
 offset** where the file's (or directory's) coverage begins. Names are never
@@ -164,7 +174,11 @@ range is bounded only by that publisher-chosen shape (u32 would silently
 cap an entry at 4 GiB); clients MUST reject values ≥ 2⁵³, past JS integer
 precision and far beyond any archive.
 
-### 5.3 `proofs` (font packages)
+### 5.3 `proofs` (font packages) — SUPERSEDED
+
+> Superseded by veritiles verified assets (veritiles `SPEC.md` A5): a glyph
+> directory is now anchored by a CARv1 proof of its UnixFS nodes, not a flat
+> per-file digest table. Retained for historical reference.
 
 ```
 proofs := ( u16le(pathLength ≥ 1) path:utf8 digest32 )+
@@ -175,13 +189,13 @@ ascending (UTF-16 code-unit order); rejects duplicates, disorder, or invalid
 UTF-8. Glyph files are fetched whole and hashed against their record.
 Measured: 256 files → 17,064 B, fetched once per session.
 
-## 6. `metadata.json` (formatVersion 2)
+## 6. `metadata.json` (formatVersion 1)
 
 Common fields, both kinds:
 
 ```json
 {
-  "formatVersion": 2,
+  "formatVersion": 1,
   "hash": "sha2-256",
   "children": [{ "name": "…", "cid": "…", "tsize": 0 }]
 }
@@ -211,7 +225,8 @@ commits to a dag-pb node the dumb host cannot serve, so the manifest pins
 the top `meta` file's content digest directly. `shardCapBytes` is build
 documentation — the client enforces the format's own 64 KiB cap instead.
 
-A **font package** adds:
+A **font package** adds (**SUPERSEDED** — fonts no longer carry a
+`metadata.json`; they are a verified asset, veritiles `SPEC.md` Part 2):
 
 ```json
 {
@@ -295,7 +310,14 @@ one structural scan marked on the buffer. In-flight requests are
 deduplicated; aborts release a shared fetch only when its last consumer
 leaves.
 
-## 9. Client read protocol — font packages
+## 9. Client read protocol — font packages — SUPERSEDED
+
+> Superseded by veritiles `VerifiedAsset` (veritiles `SPEC.md` A7–A10): the proof
+> is now the glyph directory's CARv1 proof (fetched once, keyed by anchor), a
+> glyph read walks the proof to its leaf then does one plain GET, an absent
+> name is an authenticated absence (`NotFoundError`, mapped to an empty glyph
+> response by the MapLibre adapter), and a digest mismatch rejects. The
+> behaviour below is the old flat-table equivalent, retained for reference.
 
 No range requests anywhere. The proofs file is fetched whole on first
 glyph use (digest from `children`, §6), decoded into a path → digest table,
@@ -352,10 +374,11 @@ demo's measured record size (17,064 B / 256 files ≈ 67 B) one file holds
 
 ## 12. Versioning
 
-`formatVersion` is a single integer shared by both package kinds; a client
-MUST reject a manifest whose version it does not implement. This document
-defines version 2: version 1 bundled fonts and their proofs inside the map
-package and is obsolete. Changing any binary format, the manifest schema,
+`formatVersion` is a single integer; a client MUST reject a manifest whose
+version it does not implement. This document defines version 1:
+pre-release prototypes (which bundled fonts and their proofs inside the
+map package) claim no version number. Changing any binary format, the
+manifest schema,
 or the verification rules requires a new version and yields new root CIDs;
 content updates alone also yield a new root CID (packages are immutable
 snapshots — there is no in-place mutation to version).

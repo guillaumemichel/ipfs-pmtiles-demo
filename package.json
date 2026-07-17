@@ -16,6 +16,7 @@
     "ipfs-unixfs": "13.0.0",
     "ipfs-unixfs-importer": "17.0.1",
     "multiformats": "14.0.4",
-    "pmtiles": "4.4.1"
+    "pmtiles": "4.4.1",
+    "veritiles": "0.2.0"
   }
 }

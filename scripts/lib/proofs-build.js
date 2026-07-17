@@ -13,11 +13,11 @@ import {
   SHARD_FILE_CAP,
   SHARD_RECORD_SIZE,
   shardName,
-} from '../../src/proof-format.js';
+} from './proof-format.js';
 import { encodeMeta, encodeShard } from './proof-encode.js';
 
 export const SHARD_CAP_BYTES = SHARD_FILE_CAP;
-export const META_MAX_ENTRIES = 256;
+const META_MAX_ENTRIES = 256;
 
 // leaves: [{offset, length, digest(Uint8Array 32)}], contiguous from 0.
 // Returns { files: [{path, content}], topMeta, shardCount } — paths relative

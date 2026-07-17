@@ -4,10 +4,9 @@
     <meta charset='utf-8'>
     <title>Verified PMTiles Globe with 3D Terrain</title>
     <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no'>
-    <!-- maplibre + pmtiles: exact versions, SRI-pinned. The importmap deps
-         (multiformats, dag-pb) load from esm.sh by exact version (no SRI —
-         a demo convenience; a bundling consumer of the client would inline
-         these same-origin instead). -->
+    <!-- maplibre + pmtiles: exact versions, SRI-pinned. The verified client is
+         the vendored veritiles bundle (self-contained ESM, no CDN deps) that
+         `npm run build` copies to vendor/ next to this page. -->
     <script src='https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js'
             integrity='sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp'
             crossorigin='anonymous'></script>
@@ -20,9 +19,7 @@
     <script type='importmap'>
     {
         "imports": {
-            "multiformats/cid": "https://esm.sh/multiformats@14.0.4/cid",
-            "multiformats/hashes/digest": "https://esm.sh/multiformats@14.0.4/hashes/digest",
-            "@ipld/dag-pb": "https://esm.sh/@ipld/dag-pb@4.1.7"
+            "veritiles": "./vendor/veritiles.js"
         }
     }
     </script>
@@ -41,186 +38,121 @@
     <div id='map'></div>
     <div id='badge'>loading…</div>
     <script type='module'>
-        import { FontBundle } from './src/font-bundle.js';
-        import { MapBundle } from './src/map-bundle.js';
+        import { VerifiedSource, VerifiedAsset, assetProtocol } from 'veritiles';
 
-        // The three root CIDs are the only trust anchors; each package is
-        // served from ./ipfs/<rootCID>/ next to this page. The path advertises
-        // the CID (for humans and IPFS-aware tools) but carries no trust —
-        // verification uses only the CIDs inlined here. `npm run build`
-        // reproduces all three from the data and fails if they drift, so they
-        // can't go stale.
-        const anchor = (rootCid) => ({ rootCid, sources: [{ type: 'range', url: `ipfs/${rootCid}` }] });
+        // The five CIDs are the only trust anchors. The map and elevation are
+        // range-verified packages (VerifiedSource); the fonts are a verified
+        // directory asset anchored by a CAR proof and the style is a verified
+        // raw asset (VerifiedAsset). Each package/asset is served under
+        // ./ipfs/<id>/ next to this page — the id in the path advertises the
+        // CID but carries no trust; verification uses only the CIDs here.
+        // `npm run build` reproduces all five from the data and fails if they
+        // drift, so they can't go stale.
         const config = {
-            map:       anchor('bafybeidromswvzgmm4hwagh6yn3ktbf2wajgfmt3zcqkt4oofmqw4wfkja'),
-            fonts:     anchor('bafybeigowai2gpk2sutzzsnnjt6hucdh7atuugoyfhjt3hbc2o3hkbjjbu'),
-            elevation: anchor('bafybeiada7qldt23a74cclrstwpnckmlkn6crweic3morp6gaiu7qle4dq'),
+            map:         'bafybeihnila5l5dabqrbpvaictnce5wop364y5kbc7kfowbnd5mbnpayci',
+            elevation:   'bafybeibohr6uv6wyovbqj3j5rec33qezoybzwfvtylc36sly4bcg23zlmq',
+            fontsRoot:   'bafybeigknf3p3vc5eq2q4odydrxhaxv7rtm74y53z3tobajkzdrx4gt4ia',
+            fontsAnchor: 'bagbaierarhezbhsdwonl6fpyhbu42rawgnwlqax7y7ajydtw3v2gefozogkq',
+            style:       'bafkreif5kaqrmfvu5afwjx76t5mzyw2fymiq2sdchv2dm54i7ql7bebjbm',
         };
 
-        // ?source=<host> / ?fonts=<host> / ?elevation=<host> try another host
-        // first for the map / font / elevation package (falling back to the
-        // configured one). The host publishes the standard ipfs/<rootCID>/
-        // layout — any IPFS gateway or dist/ mirror — and the path is
-        // appended here from the trusted CID, never taken from the URL.
-        // ?tamper=1 corrupts a deterministic ~1/6 of the range (tile)
-        // responses — keyed by byte offset, sparing the bootstrap run and
-        // every plain GET (metadata.json, proofs, fonts) — to show that
-        // tampered tiles are rejected, never rendered.
+        // ?source= / ?elevation= / ?fonts= / ?style=<host> try another host
+        // first for that package/asset (falling back to the configured one).
+        // The host publishes the standard ipfs/<id>/ layout — any IPFS gateway
+        // or dist/ mirror — and the id is appended here from config, never
+        // taken from the URL. For fonts the proof URL follows automatically:
+        // VerifiedAsset defaults it to <base>.car for each content base.
+        // ?tamper=1 corrupts a deterministic ~1/6 of tile (range) responses
+        // and a deterministic ~1/6 of glyph (.pbf) responses — sparing the
+        // single-sourced style body and every .car proof — to show that
+        // tampered bytes are rejected, never rendered.
         const params = new URLSearchParams(location.search);
         const tamper = params.has('tamper');
-        const sources = (pkg, key) => params.has(key)
-            ? [{ type: 'range', url: `${params.get(key).replace(/\/+$/, '')}/ipfs/${pkg.rootCid}` }, ...pkg.sources]
-            : pkg.sources;
+        const sources = (key, id) => params.has(key)
+            ? [`${params.get(key).replace(/\/+$/, '')}/ipfs/${id}`, `ipfs/${id}`]
+            : [`ipfs/${id}`];
 
-        // Deterministic per-tile: the same byte offset always corrupts (or
-        // not), so a retry / failover cannot mask it. Offset 0 is the bootstrap
-        // run and is always spared so the map still comes up.
+        // Deterministic corruption so a retry / failover cannot mask it. Tiles
+        // key on their byte offset (offset 0 is the bootstrap run, always
+        // spared so the map comes up); glyphs key on their URL.
         const corruptTile = (start) =>
             start !== 0 && (Math.imul(start, 2654435761) >>> 0) % 6 === 0;
+        const hashUrl = (s) => {
+            let h = 2166136261;
+            for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+            return h >>> 0;
+        };
+        const corruptGlyph = (url) => hashUrl(url) % 6 === 0;
+        const flipFirst = (bytes, status) => {
+            if (bytes.length > 0) bytes[0] ^= 0xff;
+            return new Response(bytes, { status });
+        };
         const tamperFetch = async (url, opts = {}) => {
             const res = await fetch(url, opts);
-            const range = opts.headers?.Range; // plain GETs (proofs, fonts) untouched
-            if (!res.ok || !range) return res;
-            const start = Number(/bytes=(\d+)-/.exec(range)?.[1]);
-            if (!corruptTile(start)) return res;
-            const bytes = new Uint8Array(await res.arrayBuffer());
-            if (bytes.length > 0) bytes[0] ^= 0xff;
-            return new Response(bytes, { status: 206 });
+            if (!res.ok) return res;
+            const range = opts.headers?.Range; // 206 tile runs
+            if (range) {
+                const start = Number(/bytes=(\d+)-/.exec(range)?.[1]);
+                if (!corruptTile(start)) return res;
+                return flipFirst(new Uint8Array(await res.arrayBuffer()), 206);
+            }
+            // Plain GETs: only glyphs are corruptible. .car proofs and the
+            // style body are single-sourced — tampering would blank the page
+            // instead of demonstrating rejection.
+            if (url.endsWith('.pbf') && corruptGlyph(url)) {
+                return flipFirst(new Uint8Array(await res.arrayBuffer()), 200);
+            }
+            return res;
         };
         const fetchFn = tamper ? tamperFetch : undefined;
 
-        // Three independent packages, one root CID each: the map (vector
-        // tiles + range proofs), the elevation (terrarium raster-dem tiles +
-        // range proofs — same package kind as the map) and the fonts (glyphs
-        // + one proofs file) — any map can be paired with any font package.
-        const [mapBundle, elevationBundle, fontBundle] = await Promise.all([
-            MapBundle.open(config.map.rootCid, sources(config.map, 'source'), { fetchFn }),
-            MapBundle.open(config.elevation.rootCid, sources(config.elevation, 'elevation'), { fetchFn }),
-            FontBundle.open(config.fonts.rootCid, sources(config.fonts, 'fonts'), { fetchFn }),
-        ]);
-        window.bundles = { map: mapBundle, elevation: elevationBundle, fonts: fontBundle }; // console access
+        // Two range-verified packages and two verified assets, one anchor each.
+        const mapSource = new VerifiedSource({
+            rootCid: config.map, source: sources('source', config.map), fetchFn,
+        });
+        const elevationSource = new VerifiedSource({
+            rootCid: config.elevation, source: sources('elevation', config.elevation), fetchFn,
+        });
+        const fonts = new VerifiedAsset({
+            cid: config.fontsAnchor, source: sources('fonts', config.fontsRoot), fetchFn,
+        });
+        const styleAsset = new VerifiedAsset({
+            cid: config.style, source: sources('style', config.style), fetchFn,
+        });
+        window.verified = { map: mapSource, elevation: elevationSource, fonts, style: styleAsset };
 
-        // Order matters: protocol.add must run before the map requests
-        // pmtiles://<key>, or the key is treated as a fetchable URL.
+        // Order matters: every protocol must be registered before the map
+        // requests pmtiles://<key> / verified://<anchor>/… / elevation://….
         const protocol = new pmtiles.Protocol();
         maplibregl.addProtocol('pmtiles', protocol.tile);
-        protocol.add(new pmtiles.PMTiles(mapBundle.pmtilesSource()));
-        maplibregl.addProtocol('verified', fontBundle.protocolHandler());
+        protocol.add(new pmtiles.PMTiles(mapSource));
+        maplibregl.addProtocol('verified', assetProtocol([fonts]));
 
-        // The elevation archive rides the same pmtiles protocol, wrapped so
-        // a tile absent from the archive (pure-ocean regions) rejects:
-        // MapLibre then leaves that tile at sea level instead of choking on
-        // an empty DEM payload.
-        const elevationPmtiles = new pmtiles.PMTiles(elevationBundle.pmtilesSource());
-        protocol.add(elevationPmtiles);
+        // The elevation archive rides the same pmtiles protocol, wrapped so a
+        // tile absent from the archive (pure-ocean regions) rejects: MapLibre
+        // then leaves that tile at sea level instead of choking on an empty
+        // DEM payload.
+        protocol.add(new pmtiles.PMTiles(elevationSource));
         maplibregl.addProtocol('elevation', async (params, abortController) => {
-            const url = params.url.replace('elevation://', `pmtiles://${config.elevation.rootCid}/`);
+            const url = params.url.replace('elevation://', `pmtiles://${config.elevation}/`);
             const response = await protocol.tile({ ...params, url }, abortController);
-            if (!response.data) throw new Error(`no elevation tile at ${params.url}`);
+            if (!response.data) {
+                // Pure-ocean region: no DEM tile in the archive. Throwing (vs.
+                // returning empty data) makes MapLibre leave the tile at sea
+                // level instead of choking; the name marks it benign so the
+                // error panel below doesn't log it.
+                const err = new Error(`no elevation tile at ${params.url}`);
+                err.name = 'ElevationAbsentError';
+                throw err;
+            }
             return response;
         });
-        // The source zoom bound comes from the verified archive header, not a
-        // hardcoded copy that could drift from the data.
-        const elevationHeader = await elevationPmtiles.getHeader();
-        const demSource = {
-            "type": "raster-dem",
-            "tiles": ["elevation://{z}/{x}/{y}"],
-            "encoding": "terrarium",
-            "tileSize": 512,
-            "maxzoom": elevationHeader.maxZoom
-        };
 
-        const style = {
-            "version": 8,
-            "projection": {
-                "type": "globe"
-            },
-            "sources": {
-                "pmtiles-source": {
-                    "type": "vector",
-                    // Root CID of the verified map package
-                    "url": "pmtiles://" + config.map.rootCid
-                },
-                // Terrain and hillshade need separate sources: MapLibre
-                // manages terrain tiles differently from layer tiles, and
-                // sharing one source makes them fight over loading.
-                "terrainSource": { ...demSource },
-                "hillshadeSource": { ...demSource }
-            },
-            "glyphs": "verified://{fontstack}/{range}.pbf",
-            "terrain": {
-                "source": "terrainSource",
-                "exaggeration": 2.0
-            },
-            "sky": {
-                "atmosphere-blend": [
-                    "interpolate",
-                    ["linear"],
-                    ["zoom"],
-                    0, 1,
-                    5, 1,
-                    7, 0
-                ]
-            },
-            "layers": [
-                {
-                    "id": "background",
-                    "type": "background",
-                    "paint": {
-                        "background-color": "#f0f8ff"
-                    }
-                },
-                {
-                    "id": "hillshade",
-                    "type": "hillshade",
-                    "source": "hillshadeSource",
-                    "paint": {
-                        "hillshade-shadow-color": "#473B24",
-                        "hillshade-illumination-anchor": "map"
-                    }
-                },
-                {
-                    "id": "land",
-                    "type": "fill",
-                    "source": "pmtiles-source",
-                    "source-layer": "land",
-                    "paint": {
-                        "fill-color": "#f8f4f0",
-                        "fill-opacity": 0.7
-                    }
-                },
-                {
-                    "id": "water",
-                    "type": "fill",
-                    "source": "pmtiles-source",
-                    "source-layer": "water",
-                    "paint": {
-                        "fill-color": "#a0c8f0"
-                    }
-                },
-                {
-                    "id": "places",
-                    "type": "symbol",
-                    "source": "pmtiles-source",
-                    "source-layer": "places",
-                    "layout": {
-                        "text-field": [
-                            "get",
-                            "name"
-                        ],
-                        "text-size": 12,
-                        "text-font": [
-                            "Noto Sans Regular"
-                        ]
-                    },
-                    "paint": {
-                        "text-color": "#333333",
-                        "text-halo-color": "#ffffff",
-                        "text-halo-width": 1
-                    }
-                }
-            ]
-        };
+        // The style is a verified raw asset: fetch, hash against STYLE_CID,
+        // parse. Its pmtiles:// / verified:// / elevation:// references and the
+        // raster-dem maxzoom were baked into it at build time from the same
+        // CIDs and the elevation archive header.
+        const style = JSON.parse(new TextDecoder().decode(await styleAsset.bytes('')));
 
         const map = new maplibregl.Map({
             container: 'map',
@@ -234,12 +166,12 @@
 
         const badge = document.getElementById('badge');
         let diagnostic = '';
-        let withheld = 0; // tiles that failed to fetch without a verification reject
+        let withheld = 0; // responses that failed to fetch without a verification reject
         setInterval(() => {
             if (diagnostic) { badge.innerHTML = diagnostic; return; }
-            const bundles = [mapBundle, elevationBundle, fontBundle];
-            const verified = bundles.reduce((n, b) => n + b.stats.verified, 0);
-            const rejected = bundles.reduce((n, b) => n + b.stats.rejected, 0);
+            const all = [mapSource, elevationSource, fonts, styleAsset];
+            const verified = all.reduce((n, s) => n + s.stats.verified, 0);
+            const rejected = all.reduce((n, s) => n + s.stats.rejected, 0);
             // Withheld vs tampered surface differently: a rejected hash is a
             // tamper; a withheld response is a fetch failure.
             badge.innerHTML = `✓ ${verified} hashes verified` +
@@ -258,19 +190,25 @@
         };
         map.on('error', (e) => {
             const err = e?.error;
-            // A ranged fetch rejecting with TypeError after metadata.json loaded
-            // is a CORS-preflight block (Firefox + a host that can't allow
-            // Range): surface the exact diagnosis instead of a blank map.
+            // A ranged fetch rejecting with TypeError after a plain GET already
+            // succeeded is a CORS-preflight block (Firefox + a host that can't
+            // allow Range): surface the exact diagnosis instead of a blank map.
             if (findError(err, 'RangeBlockedError')) {
                 diagnostic = '<span class="rejected">✗ host refuses cross-origin range ' +
                     'requests in this browser</span>';
+            } else if (findError(err, 'NotFoundError') || findError(err, 'ElevationAbsentError')) {
+                // Authenticated absence: a glyph range the artifact does not
+                // contain, or a DEM tile absent from the elevation archive
+                // (pure ocean). assetProtocol already resolves absent glyph
+                // ranges to empty and MapLibre renders ocean at sea level;
+                // both are benign misses, not tampers — leave the badge alone.
             } else if (findError(err, 'AggregateError') && !findError(err, 'VerificationError')) {
                 // A source failure with no verification reject = withholding.
                 withheld++;
             } else if (!findError(err, 'VerificationError')) {
-                // Verification rejects already show on the badge; registering
-                // an error listener suppresses MapLibre's default logging, so
-                // pass everything else through instead of swallowing it.
+                // Verification rejects already show on the badge; registering an
+                // error listener suppresses MapLibre's default logging, so pass
+                // everything else through instead of swallowing it.
                 console.error(err);
             }
         });

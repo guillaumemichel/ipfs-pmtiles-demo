@@ -48,23 +48,23 @@ This project demonstrates:
 1. **PMTiles File**: The entire map dataset is stored in a single `.pmtiles`
    file, which contains vector tiles optimized for web delivery using [HTTP
    range requests](https://en.wikipedia.org/wiki/Byte_serving).
-2. **Three Verified Packages**: The build emits three independent,
-   individually verifiable packages — a **map package** (the vector archive +
-   range proofs), an **elevation package** (a raster-dem PMTiles archive +
-   range proofs — the same package kind as the map), and a **font package**
-   (glyph files + one digest per file). Fonts are map-independent: one font
-   package serves any number of maps, and any map can be paired with any
-   font package.
-3. **IPFS Pinning**: Each package is one root CID; pinning any of them makes
-   it accessible to any IPFS node.
-4. **Fetching Tiles**: Map tiles, elevation tiles and fonts are fetched in the
-   browser on demand using HTTP range requests — by default from the same
-   static host that serves the page, or from any other host (an S3 bucket, a
-   range-capable IPFS gateway like [`dweb.link`](https://dweb.link)) via the
-   `?source=`, `?elevation=` and `?fonts=` flags.
+2. **Two verified packages + two verified assets**: The build emits two
+   range-verified packages — a **map package** (the vector archive + range
+   proofs) and an **elevation package** (a raster-dem PMTiles archive + range
+   proofs, the same package kind) — and two **verified assets** read by the
+   veritiles library: the **font glyphs** (a UnixFS directory anchored by a
+   CARv1 proof) and the **style** (a raw ≤ 256 KiB file that self-verifies).
+   Fonts are map-independent: one font asset serves any number of maps.
+3. **IPFS Pinning**: Each package/asset is content-addressed; pinning its root
+   CID makes it accessible to any IPFS node.
+4. **Fetching Tiles**: Map tiles and elevation tiles are fetched with HTTP
+   range requests; the style and glyphs with plain whole-file GETs — by default
+   from the same static host that serves the page, or from any other host (an
+   S3 bucket, a range-capable IPFS gateway like [`dweb.link`](https://dweb.link))
+   via the `?source=`, `?elevation=`, `?fonts=` and `?style=` flags.
 5. **Client-Side Rendering**: MapLibre GL renders the map as a globe with 3D
    terrain and hillshading using the PMTiles protocol, verifying every byte
-   against the three root CIDs.
+   against the inlined trust anchors via the veritiles library.
 
 ### Data
 
@@ -125,7 +125,7 @@ The build writes one CAR per package; example using Kubo:
 ```sh
 $ ipfs dag import build/map.car        # pins the map package root
 $ ipfs dag import build/elevation.car  # pins the elevation package root
-$ ipfs dag import build/fonts.car      # pins the font package root
+$ ipfs dag import build/fonts.car      # pins the font asset (all blocks, incl. glyphs)
 ```
 
 ### MapLibre Fetching and Rendering
@@ -151,8 +151,9 @@ The demo uses a simple HTML page (`index.html`) that:
      `elevation://` MapLibre protocol backed by the elevation package's own
      verifying `Source` (a tile absent from the archive — pure ocean —
      rejects, which MapLibre renders as sea level).
-   - Font glyphs resolved through the font package's own root CID via a
-     `verified://` MapLibre protocol.
+   - Font glyphs resolved through the font asset's CAR anchor via veritiles'
+     `verified://` MapLibre protocol (`assetProtocol`); the MapLibre style is
+     itself a verified raw asset, fetched and hashed before the map is created.
    - Globe projection with a sky/atmosphere fading out at higher zooms
    - Most basic styling layers for hillshading, land, water, and place labels
 
@@ -179,12 +180,11 @@ entire map, elevation and fonts.
 
 ## How Verification Works
 
-Every byte the browser renders is verifiable against one of three root CIDs
-— one for the map package, one for the elevation package (the same package
-kind as the map, holding a raster-dem archive), one for the font package —
-and **everything needed to verify ships inside each published directory
-itself**: `ipfs get <rootCID>` produces a package that any static file host
-can serve and any client can verify:
+Every byte the browser renders is verifiable against an inlined trust anchor —
+the map package root, the elevation package root, the font asset's CAR anchor,
+and the raw style CID — and **everything needed to verify ships inside each
+published directory itself**: `ipfs get <id>` produces content any static file
+host can serve and any client can verify:
 
 ```sh
 📁 map / elevation package / (root CID — the only thing the map client must trust)
@@ -194,13 +194,16 @@ can serve and any client can verify:
    ├─ 📄 meta               (index: ranges + digests of the shards below)
    └─ 📄 {hex start offset} (shard: ~1,800 range hashes, ≤ 64 KiB each)
 
-📁 font package / (its own root CID — reusable with any map)
-├─ 📄 metadata.json   (bootstrap manifest: sibling CIDs)
-├─ 📄 proofs          (one hash per font file, binary records)
-└─ 📁 fonts/
-   └─ 📁 {fontstack}/
-      └─ 📄 {range}.pbf
+📁 fonts asset  ipfs/<fontsRoot>/{fontstack}/{range}.pbf   (plain glyph tree)
+📄 fonts proof  ipfs/<fontsRoot>.car    (CARv1 of the directory's UnixFS nodes;
+                                         anchored by its CAR CID — the trust input)
+📄 style asset  ipfs/<styleCID>         (raw ≤ 256 KiB file; self-verifying)
 ```
+
+The font glyphs and style are verified by the veritiles library
+(`VerifiedAsset`, format in veritiles `SPEC.md` (Part 2)): a glyph read walks the CAR proof
+to its leaf then does one plain GET; the style is fetched whole and hashed
+against `<styleCID>`.
 
 The archive is imported with a **tile-aligned chunker**, so every tile is one
 IPFS block — a contiguous byte range of `map.pmtiles` whose sha2-256 digest
@@ -217,15 +220,17 @@ larger scales, nested subdirectories) that are fetched only when browsed.
    require the rebuilt node's CID to **equal the configured root CID**. One
    hash comparison now authenticates every value in the manifest.
 
-All three packages bootstrap this way (elevation follows the map flow); the
-two package kinds differ only in what hangs below:
+Both map packages bootstrap this way (elevation follows the map flow):
 
 3. Map: fetch `proofs/meta` (digest pinned by the manifest), then, lazily,
    the shard covering each requested byte range (digest pinned by `meta`);
    range-fetch tile bytes and verify each range against its shard digest.
-4. Fonts: fetch `proofs` whole (digest pinned by the manifest's child CID),
-   then fetch each glyph file whole and verify it against its record. No
-   range requests anywhere.
+
+Fonts bootstrap differently (veritiles `VerifiedAsset`): fetch the CAR proof
+whole (hashed against the CAR anchor), then read each glyph by walking the
+proof's UnixFS nodes to a leaf and doing one plain GET. The style needs no
+proof at all — the raw CID is the hash of its bytes. No range requests for
+either asset.
 
 A host can withhold data but cannot alter it undetected: tampering degrades
 to missing tiles, counted on the on-map badge — never to wrong map data. The
@@ -238,9 +243,13 @@ exactly like gateway paths — a legibility and interop convention (IPFS-aware
 tools recognize `/ipfs/` paths) that carries **no trust**: a URL path is an
 unenforced claim, and the client takes root CIDs only from the config inlined
 in `index.html`, never from URLs.
-The [`src/`](src/) modules implement a custom pmtiles.js `Source` and a
-MapLibre glyph protocol, hash with WebCrypto, and reject on mismatch. The
-binary formats and client protocol are specified in [SPEC.md](SPEC.md).
+The browser client is the [veritiles](https://github.com/guillaumemichel/veritiles)
+library (a local `file:` dependency here, vendored into `dist/vendor/`): its
+`VerifiedSource` is a pmtiles.js `Source` for the range-verified map and
+elevation packages, and its `VerifiedAsset` + `assetProtocol` verify the font
+glyphs and the style as whole-file **assets**. The map-package binary format is
+specified in [SPEC.md](SPEC.md); the verified-asset format (fonts, style) in
+veritiles' [`SPEC.md`](https://github.com/guillaumemichel/veritiles/blob/main/SPEC.md).
 
 ### Build
 
@@ -253,21 +262,26 @@ The build parses the map and elevation archives, asserts each is clustered
 and deduplicated, re-imports each with tile-aligned cut points, and then:
 
 - packs each archive's leaf digests into `proofs/` shards (≤ 64 KiB each)
-  plus their `meta` index, and all font digests into the font package's
-  `proofs`;
-- generates each package's `metadata.json` last, from the sibling CIDs it
+  plus their `meta` index;
+- generates each map package's `metadata.json` last, from the sibling CIDs it
   must attest;
+- imports the glyph directory as a verified asset and emits its structure-only
+  CARv1 proof at `dist/ipfs/<fontsRoot>.car` (anchored by the CAR CID), and
+  bakes the built CIDs into the MapLibre style, published as a raw asset at
+  `dist/ipfs/<styleCID>`;
 - writes `build/map.car`, `build/elevation.car` and `build/fonts.car` (all
   blocks — the IPFS-publication artifacts, one root CID each);
 - assembles **`dist/`** — a complete, self-contained static site: the page
-  (`index.html`), the client (`src/`), and the three data packages, each
-  under `dist/ipfs/<rootCID>/`, byte-identical to what `ipfs get <rootCID>`
-  yields;
-- re-reads the bootstrap, sample tiles and a glyph back through the real
-  client resolvers over an in-process dumb host, asserting byte-identity;
-- asserts the three root CIDs inlined in `index.html` match the freshly
-  built packages — the demo carries its trust anchors inline (no
-  `config.json`), and this guard fails the build if they ever drift.
+  (`index.html`), the vendored veritiles client (`vendor/veritiles.js`), the
+  map and elevation packages, the font asset, and the style, each under
+  `dist/ipfs/<id>/`, byte-identical to what `ipfs get <id>` yields;
+- re-reads the bootstrap, sample tiles, the style and a glyph back through the
+  real veritiles resolvers over an in-process dumb host, asserting byte-identity
+  and that a flipped glyph byte rejects;
+- asserts the five CIDs inlined in `index.html` (`map`, `elevation`,
+  `fontsRoot`, `fontsAnchor`, `style`) match the freshly built artifacts — the
+  demo carries its trust anchors inline (no `config.json`), and this guard
+  fails the build if they ever drift.
 
 The build is deterministic — same inputs and tool versions yield the same
 root CIDs _and_ the same proof bytes — guarded by golden tests.

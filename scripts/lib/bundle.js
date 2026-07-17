@@ -1,15 +1,16 @@
-// The reproducible core of the build, extracted so the golden tests can
-// re-derive the same root CIDs. Two package kinds, each an independent root
-// directory CID a client can bootstrap from:
+// The reproducible core of the map/elevation build, extracted so the golden
+// tests can re-derive the same root CIDs. Each package is an independent root
+// directory CID a client (the veritiles VerifiedSource) can bootstrap from:
 //
 //   map package   map.pmtiles (tile-aligned import) + proofs/ tree + metadata.json
 //                 (the demo builds two: the vector map and the elevation)
-//   font package  fonts/ files + one proofs file + metadata.json
 //
-// Pure functions of the input files + installed tool versions — no
-// timestamps, no machine-specific data. metadata.json is always generated
-// last because it lists its siblings' CIDs (never its own — the client
-// self-hashes it instead).
+// Fonts and the style are published as verified *assets* (veritiles SPEC.md Part 2,
+// veritiles VerifiedAsset) instead of a bespoke package — see
+// scripts/build.mjs. Pure functions of the input files + installed tool
+// versions — no timestamps, no machine-specific data. metadata.json is
+// generated last because it lists its siblings' CIDs (never its own — the
+// client self-hashes it instead).
 import { createRequire } from 'node:module';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -18,7 +19,6 @@ import { gunzipSync } from 'node:zlib';
 
 import * as dagPb from '@ipld/dag-pb';
 
-import { RAW_CODE } from '../../src/verify.js';
 import { cutPointChunker } from './chunker.js';
 import { computeCutPoints } from './cutpoints.js';
 import {
@@ -28,16 +28,13 @@ import {
   RecordingBlockstore,
 } from './dag-build.js';
 import { parseArchive } from './pmtiles-parse.js';
-import { encodeFontProofs } from './proof-encode.js';
 import { buildProofTree, SHARD_CAP_BYTES, sha256 } from './proofs-build.js';
+
+const RAW_CODE = 0x55; // raw UnixFS leaf / raw-block codec
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-export const FORMAT_VERSION = 2;
-
-// Provenance of the demo font set (data/fonts) — shared by the build and
-// the golden test so both derive the same fonts root CID.
-export const FONT_SET_PROVENANCE = { source: { assets: 'protomaps/basemaps-assets' } };
+export const FORMAT_VERSION = 1;
 
 // Upstream builds the demo archives were extracted from — shared by the
 // build and the golden tests so both derive the same root CIDs.
@@ -63,14 +60,8 @@ export async function assembleMapBundle({ fileBytes, sourceBuild }) {
   return { header, tileRanges, ...dag };
 }
 
-// Font package from a directory of glyph files.
-export async function assembleFontBundle({ fontsDir, provenance = {} }) {
-  const fontFiles = await collectFiles(fontsDir, 'fonts');
-  return assembleFontDag({ fontFiles, provenance });
-}
-
-// Map DAG for any tile-aligned archive, reused by tests on synthetic inputs.
-export async function assembleMapDag({ mapBytes, cuts, provenance = {}, shardCap = SHARD_CAP_BYTES, metaMaxEntries }) {
+// Map DAG for any tile-aligned archive.
+async function assembleMapDag({ mapBytes, cuts, provenance = {}, shardCap = SHARD_CAP_BYTES, metaMaxEntries }) {
   const blockstore = new RecordingBlockstore();
   const mapEntry = await importChunkedFile(mapBytes, cutPointChunker(cuts), blockstore);
   const leaves = fileLeaves(blockstore.blocks, mapEntry.cid);
@@ -102,34 +93,6 @@ export async function assembleMapDag({ mapBytes, cuts, provenance = {}, shardCap
   });
   const root = await sealRoot(children, metadataBytes, blockstore);
   return { blockstore, mapEntry, leaves, proofTree, metadataBytes, children, root };
-}
-
-// Font DAG: fontFiles are {path: 'fonts/…', content}; the proofs file maps
-// each path relative to fonts/ to the sha256 of its bytes.
-export async function assembleFontDag({ fontFiles, provenance = {} }) {
-  if (fontFiles.length === 0) throw new Error('at least one font file is required');
-  const blockstore = new RecordingBlockstore();
-  const proofsBytes = encodeFontProofs(
-    fontFiles.map(({ path, content }) => ({
-      path: path.replace(/^fonts\//, ''),
-      digest: sha256(content),
-    })),
-  );
-  const entries = [...fontFiles, { path: 'proofs', content: proofsBytes }];
-  assertSingleLeaf(entries);
-  const roots = await importTree(entries, blockstore);
-
-  const children = [
-    { name: 'fonts', ...roots.get('fonts') },
-    { name: 'proofs', ...roots.get('proofs') },
-  ];
-  const metadataBytes = buildManifest({
-    section: { fonts: { dir: 'fonts', proofs: 'proofs' } },
-    children,
-    provenance,
-  });
-  const root = await sealRoot(children, metadataBytes, blockstore);
-  return { blockstore, fontFiles, proofsBytes, metadataBytes, children, root };
 }
 
 // The bootstrap manifest: everything a client needs to verify the package
