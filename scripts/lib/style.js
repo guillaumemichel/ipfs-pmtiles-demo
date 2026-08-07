@@ -7,7 +7,7 @@
 //   - glyphs at verified://<fontsAnchor>/{fontstack}/{range}.pbf (VerifiedAsset),
 //   - terrain/hillshade at elevation://{z}/{x}/{y} (the app's ocean-tile wrapper
 //     over the elevation VerifiedSource), maxzoom baked from the archive header.
-export function buildStyle({ mapRoot, fontsAnchor, elevationMaxZoom }) {
+export function buildStyle({ mapAnchor, fontsAnchor, elevationMaxZoom }) {
   const demSource = {
     type: 'raster-dem',
     tiles: ['elevation://{z}/{x}/{y}'],
@@ -19,7 +19,7 @@ export function buildStyle({ mapRoot, fontsAnchor, elevationMaxZoom }) {
     version: 8,
     projection: { type: 'globe' },
     sources: {
-      'pmtiles-source': { type: 'vector', url: `pmtiles://${mapRoot}` },
+      'pmtiles-source': { type: 'vector', url: `pmtiles://${mapAnchor}` },
       // Terrain and hillshade need separate sources: MapLibre manages terrain
       // tiles differently from layer tiles, and sharing one makes them fight
       // over loading.

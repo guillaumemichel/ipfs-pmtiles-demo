@@ -40,37 +40,27 @@
     <script type='module'>
         import { VerifiedSource, VerifiedAsset, assetProtocol } from 'veritiles';
 
-        // The five CIDs are the only trust anchors. The map and elevation are
-        // range-verified packages (VerifiedSource); the fonts are a verified
-        // directory asset anchored by a CAR proof and the style is a verified
-        // raw asset (VerifiedAsset). Each package/asset is served under
-        // ./ipfs/<id>/ next to this page — the id in the path advertises the
-        // CID but carries no trust; verification uses only the CIDs here.
-        // `npm run build` reproduces all five from the data and fails if they
-        // drift, so they can't go stale.
+        // The four CIDs are the only trust anchors. File locations are
+        // untrusted and can be replaced with the host query parameters below.
+        // `npm run build` checks these anchors against packaged artifacts.
         const config = {
-            map:         'bafybeihnila5l5dabqrbpvaictnce5wop364y5kbc7kfowbnd5mbnpayci',
-            elevation:   'bafybeibohr6uv6wyovbqj3j5rec33qezoybzwfvtylc36sly4bcg23zlmq',
-            fontsRoot:   'bafybeigknf3p3vc5eq2q4odydrxhaxv7rtm74y53z3tobajkzdrx4gt4ia',
-            fontsAnchor: 'bagbaierarhezbhsdwonl6fpyhbu42rawgnwlqax7y7ajydtw3v2gefozogkq',
-            style:       'bafkreif5kaqrmfvu5afwjx76t5mzyw2fymiq2sdchv2dm54i7ql7bebjbm',
+            map:       'bafyreifxbxeu4m3xedbpgq5tx4k4ud4j2wxcpikg5dyzdxdhhy6zvcwo3u',
+            elevation: 'bafyreiacny7rdvqj32fil5yxzvcurg6xb5bnhxn3zt53lemoala23x2hai',
+            fonts:     'bafyreigr3kszmxht36pxnoddfdraxqnyy4x7ylnqyfnubenpdyqftozamm',
+            style:     'STYLE_CID',
         };
 
         // ?source= / ?elevation= / ?fonts= / ?style=<host> try another host
-        // first for that package/asset (falling back to the configured one).
-        // The host publishes the standard ipfs/<id>/ layout — any IPFS gateway
-        // or dist/ mirror — and the id is appended here from config, never
-        // taken from the URL. For fonts the proof URL follows automatically:
-        // VerifiedAsset defaults it to <base>.car for each content base.
+        // first for that artifact, then the same-origin packaged copy.
         // ?tamper=1 corrupts a deterministic ~1/6 of tile (range) responses
         // and a deterministic ~1/6 of glyph (.pbf) responses — sparing the
         // single-sourced style body and every .car proof — to show that
         // tampered bytes are rejected, never rendered.
         const params = new URLSearchParams(location.search);
         const tamper = params.has('tamper');
-        const sources = (key, id) => params.has(key)
-            ? [`${params.get(key).replace(/\/+$/, '')}/ipfs/${id}`, `ipfs/${id}`]
-            : [`ipfs/${id}`];
+        const sources = (key, path) => params.has(key)
+            ? [`${params.get(key).replace(/\/+$/, '')}/${path}`, path]
+            : [path];
 
         // Deterministic corruption so a retry / failover cannot mask it. Tiles
         // key on their byte offset (offset 0 is the bootstrap run, always
@@ -108,16 +98,16 @@
 
         // Two range-verified packages and two verified assets, one anchor each.
         const mapSource = new VerifiedSource({
-            rootCid: config.map, source: sources('source', config.map), fetchFn,
+            cid: config.map, source: sources('source', 'map.pmtiles'), fetchFn,
         });
         const elevationSource = new VerifiedSource({
-            rootCid: config.elevation, source: sources('elevation', config.elevation), fetchFn,
+            cid: config.elevation, source: sources('elevation', 'elevation.pmtiles'), fetchFn,
         });
         const fonts = new VerifiedAsset({
-            cid: config.fontsAnchor, source: sources('fonts', config.fontsRoot), fetchFn,
+            cid: config.fonts, source: sources('fonts', 'assets/fonts'), fetchFn,
         });
         const styleAsset = new VerifiedAsset({
-            cid: config.style, source: sources('style', config.style), fetchFn,
+            cid: config.style, source: sources('style', 'assets/style.json'), fetchFn,
         });
         window.verified = { map: mapSource, elevation: elevationSource, fonts, style: styleAsset };
 
