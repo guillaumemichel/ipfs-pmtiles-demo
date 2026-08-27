@@ -40,9 +40,13 @@
     <script type='module'>
         import { VerifiedSource, VerifiedAsset, assetProtocol } from 'veritiles';
 
-        // The four CIDs are the only trust anchors. File locations are
-        // untrusted and can be replaced with the host query parameters below.
-        // `npm run build` checks these anchors against packaged artifacts.
+        // The four CIDs are the only trust anchors, and the only thing this
+        // page carries — no URL appears below. Locations come from `hints.json`
+        // beside this page (the client's default routing-hints document), an
+        // untrusted file whose every URL is still verified against these
+        // anchors, and for the individual glyphs from a second document the
+        // client discovers beside the font bundle. `npm run build` derives all
+        // of it, and checks these anchors against the packaged artifacts.
         const config = {
             map:       'bafyreiaxo6p3oqrt4lz4armeobbbqegrch2gddbwhorudmi2oiozkdlhgy',
             elevation: 'bafyreibjxxemhc4chmic627vfl3a3emlfoo7ncwzwe2iuif5ybrwnflqga',
@@ -50,20 +54,19 @@
             style:     'STYLE_CID',
         };
 
-        // ?source= / ?elevation= / ?fonts= / ?style=<host> try another host
-        // first for that artifact, then the same-origin packaged copy.
-        // ?tamper=1 corrupts a deterministic ~1/6 of tile (range) responses
-        // and a deterministic ~1/6 of glyph (.pbf) responses — sparing the
-        // single-sourced style body and every .car proof — to show that
-        // tampered bytes are rejected, never rendered.
+        // ?hints=<url> consults another routing-hints document first, then the
+        // packaged one — relocating every artifact at once, without touching an
+        // anchor. ?tamper=1 corrupts a deterministic ~1/6 of tile (range)
+        // responses and ~1/6 of glyph (.pbf) responses to show that tampered
+        // bytes are rejected, never rendered.
         const params = new URLSearchParams(location.search);
         const tamper = params.has('tamper');
-        const sources = (key, path) => params.has(key)
-            ? [`${params.get(key).replace(/\/+$/, '')}/${path}`, path]
-            : [path];
+        const hints = params.has('hints')
+            ? [params.get('hints'), './hints.json']
+            : undefined; // undefined = the client's own ./hints.json default
 
-        // Deterministic corruption so a retry / failover cannot mask it. Tiles
-        // key on their byte offset (offset 0 is the bootstrap run, always
+        // Deterministic corruption so a retry or a failover cannot mask it.
+        // Tiles key on their byte offset (offset 0 is the bootstrap run, always
         // spared so the map comes up); glyphs key on their URL.
         const corruptTile = (start) =>
             start !== 0 && (Math.imul(start, 2654435761) >>> 0) % 6 === 0;
@@ -86,9 +89,9 @@
                 if (!corruptTile(start)) return res;
                 return flipFirst(new Uint8Array(await res.arrayBuffer()), 206);
             }
-            // Plain GETs: only glyphs are corruptible. .car proofs and the
-            // style body are single-sourced — tampering would blank the page
-            // instead of demonstrating rejection.
+            // Plain GETs: only glyphs are corruptible. The hints documents, the
+            // bundle proof, and the style body are single-sourced here, so
+            // tampering one would blank the page instead of showing a rejection.
             if (url.endsWith('.pbf') && corruptGlyph(url)) {
                 return flipFirst(new Uint8Array(await res.arrayBuffer()), 200);
             }
@@ -97,18 +100,10 @@
         const fetchFn = tamper ? tamperFetch : undefined;
 
         // Two range-verified packages and two verified assets, one anchor each.
-        const mapSource = new VerifiedSource({
-            cid: config.map, source: sources('source', 'map.pmtiles'), fetchFn,
-        });
-        const elevationSource = new VerifiedSource({
-            cid: config.elevation, source: sources('elevation', 'elevation.pmtiles'), fetchFn,
-        });
-        const fonts = new VerifiedAsset({
-            cid: config.fonts, source: sources('fonts', 'assets/fonts'), fetchFn,
-        });
-        const styleAsset = new VerifiedAsset({
-            cid: config.style, source: sources('style', 'assets/style.json'), fetchFn,
-        });
+        const mapSource = new VerifiedSource({ cid: config.map, hints, fetchFn });
+        const elevationSource = new VerifiedSource({ cid: config.elevation, hints, fetchFn });
+        const fonts = new VerifiedAsset({ cid: config.fonts, hints, fetchFn });
+        const styleAsset = new VerifiedAsset({ cid: config.style, hints, fetchFn });
         window.verified = { map: mapSource, elevation: elevationSource, fonts, style: styleAsset };
 
         // Order matters: every protocol must be registered before the map

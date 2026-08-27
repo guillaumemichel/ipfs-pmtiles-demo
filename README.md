@@ -4,7 +4,7 @@
 
 This MapLibre globe verifies every fetched map tile, terrain tile, style file,
 font proof, and font glyph before rendering it. It uses
-[veritiles v0.3.1](https://github.com/guillaumemichel/veritiles/releases/tag/v0.3.1)
+[veritiles v0.4.0](https://github.com/guillaumemichel/veritiles/releases/tag/v0.4.0)
 with ordinary static hosting: GitHub Pages, an object store, or any HTTP server
 that supports single `Range` requests.
 
@@ -14,19 +14,60 @@ that supports single `Range` requests.
 
 ```text
 map.pmtiles
-map.pmtiles.proofs/       # v0.3 descriptor (`root`) and proof tree
+map.pmtiles.proofs/       # v0.4 descriptor (`root`) and proof tree
 elevation.pmtiles
 elevation.pmtiles.proofs/
 assets/style.json         # raw-CID verified style
-assets/fonts/             # font files
-assets/fonts.car          # v0.3 MASL bundle proof for fonts
+assets/fonts.car          # 32 KB MASL bundle proof: the manifest, nothing else
+assets/fonts/             # the glyphs themselves, verified per file
+assets/hints.json         # glyph locations, found by discovery
+hints.json                # anchor and archive locations
 vendor/veritiles.js
 index.html
 ```
 
-The page inlines four trust anchors: map, elevation, font bundle, and style.
-URLs are untrusted transport locations. `?source=`, `?elevation=`, `?fonts=`,
-and `?style=` try a different host first, then fall back to the packaged copy.
+## Anchors In The Page, Locations In `hints.json`
+
+The page inlines four trust anchors — map, elevation, font bundle, style — and
+no URL whatsoever. Locations live in routing-hints documents
+([veritiles `SPEC.md`](https://github.com/guillaumemichel/veritiles/blob/main/SPEC.md) §5),
+which are untrusted and outside the root of trust: every byte they point at is
+verified against the anchor in the page, so a hostile document can misdirect a
+request but never alter a result that verifies. Moving the site to another host
+is an edit to one JSON file and never touches a CID.
+
+Two documents, because they change on different cadences and are needed at
+different times:
+
+- **`hints.json`**, beside the page — the client's default document. Six
+  entries: each archive's anchor names its proof directory and its raw CID
+  names the archive, the font anchor names the bundle proof, the style CID
+  names the style.
+- **`assets/hints.json`** — one entry per glyph, mapping each resource's raw
+  CID to its published file. The page never names this document; the client
+  discovers it by probing the directory that holds `fonts.car` when a glyph
+  location is missing, so it costs nothing until the first label renders.
+
+`?hints=<url>` consults a different document first and falls back to the
+packaged one.
+
+## The `fonts.car` Fix
+
+`assets/fonts.car` is a *proof*: the MASL manifest block and nothing else,
+32,214 B for 256 glyphs. It used to be 6,282,283 B, because veritiles'
+`pack -- assets` inlines every file smaller than the 8 MiB CARv1 raw-section
+cap as an optional raw block, with no threshold and no way to opt out. That
+turned the proof into a second complete copy of the glyph directory, which the
+client downloaded whole before the first text label could render — and made the
+demo publish every glyph twice.
+
+The bundle anchor is the sha2-256 of the manifest block alone, so dropping the
+raw sections is lossless and the anchor is unchanged. `scripts/lib/thin-car.js`
+does it; the build applies it on every run and asserts the result is a single
+block, so a future repack cannot quietly reintroduce the bloat. Per veritiles
+`SPEC.md` §3.2 the raw blocks are optional and the client falls back to
+`{base}/{path}`, which is what makes the glyphs above genuinely lazy: only the
+ranges a label needs are fetched, and each is hashed against the manifest.
 
 ## Build And Verify
 
@@ -37,26 +78,29 @@ npm run build
 npm run test:http
 ```
 
-`npm run build` assembles `dist/`, verifies representative byte ranges from
-both PMTiles files with the released v0.3 client, and verifies the style and a
-font glyph. `npm run test:http` repeats verification through the static HTTP
-server and asserts that map data uses `206` ranges while proof and asset reads
-are whole-file `GET`s.
+`npm run build` assembles `dist/`, derives both hints documents from the
+anchors and the packaged bytes, then reads the site back through them with no
+location configured anywhere else: representative byte ranges from both PMTiles
+files, the style, and all 256 glyphs. `npm run test:http` repeats that through
+the static HTTP server and asserts that map data uses `206` ranges, that the
+hints documents, proofs, and assets are whole-file `GET`s, that the glyph
+document is reached by discovery rather than by configuration, and that a
+tampered glyph is rejected.
 
 Run locally with:
 
 ```sh
 npm run serve
-# http://127.0.0.1:8080/dist/
+# http://127.0.0.1:8080/ (the server's root is dist/)
 ```
 
 ## Repacking Data
 
-The checked-in proof data was generated by veritiles v0.3.1's published pack
+The checked-in proof data was generated by veritiles v0.4.0's published pack
 tool. Recreate it after replacing either archive:
 
 ```sh
-git clone --depth 1 --branch v0.3.1 https://github.com/guillaumemichel/veritiles.git /tmp/veritiles
+git clone --depth 1 --branch v0.4.0 https://github.com/guillaumemichel/veritiles.git /tmp/veritiles
 cd /tmp/veritiles
 npm install
 npm run pack -- /path/to/map.pmtiles --unixfs --full-car /path/to/build/map.car --out /path/to/data/map.pmtiles.proofs
@@ -64,14 +108,19 @@ npm run pack -- /path/to/elevation.pmtiles --unixfs --full-car /path/to/build/el
 npm run pack -- assets /path/to/data/fonts --out /path/to/data/fonts.car
 ```
 
-Copy the three printed anchors into `index.html` and run `npm test && npm run build`.
+Copy the three printed anchors into `index.html` and run `npm test && npm run build`;
+the build rewrites both hints documents around them. The `pack -- assets` output
+will be inflated with inlined glyph bytes as described above — the build thins it
+when publishing, and `data/fonts.car` is checked in already thinned.
+
 `--unixfs` embeds the standard 256 KiB UnixFS root in each PMTiles descriptor;
 the `--full-car` outputs are pinnable publication artifacts in `build/`.
 
 ## Hosting Requirements
 
 - Archive requests must return exact single-range `206` responses.
-- Proofs, style, fonts, and `fonts.car` need ordinary `GET` support.
+- Both `hints.json` files, the proofs, the style, `fonts.car`, and the glyph
+  files need ordinary `GET` support.
 - Cross-origin hosts need `Access-Control-Allow-Origin`; Firefox hosts must
   also answer `OPTIONS` permitting `Range`.
 - Serve HTTPS or localhost for WebCrypto.

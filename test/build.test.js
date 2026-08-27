@@ -8,6 +8,7 @@ import { VerifiedAsset, VerifiedSource } from 'veritiles';
 
 import { directoryFetch } from '../scripts/lib/local-fetch.js';
 import { parseArchive } from '../scripts/lib/pmtiles-parse.js';
+import { carBlockCount } from '../scripts/lib/thin-car.js';
 
 const dataDir = new URL('../data/', import.meta.url);
 const mapCid = 'bafyreiaxo6p3oqrt4lz4armeobbbqegrch2gddbwhorudmi2oiozkdlhgy';
@@ -24,7 +25,7 @@ test('the PMTiles archives retain their measured facts', async () => {
   assert.equal(parseArchive(elevation).header.maxZoom, 4);
 });
 
-test('v0.3.1 proofs authenticate both PMTiles archives and bind UnixFS roots', async () => {
+test('v0.4.0 proofs authenticate both PMTiles archives and bind UnixFS roots', async () => {
   for (const [cid, source] of [[mapCid, 'map.pmtiles'], [elevationCid, 'elevation.pmtiles']]) {
     const descriptor = await readFile(new URL(`${source}.proofs/root`, dataDir));
     assert.equal(unixfsCid(descriptor).code, 0x70);
@@ -43,10 +44,26 @@ function unixfsCid(descriptor) {
   return CID.decode(descriptor.subarray(start + marker.length, start + marker.length + 36));
 }
 
-test('the MASL font bundle authenticates a glyph', async () => {
-  const fonts = new VerifiedAsset({ cid: fontsCid, source: 'fonts', fetchFn });
+// veritiles' `pack -- assets` inlines every file under the 8 MiB raw-section
+// cap, which turns a bundle proof into a second copy of the content. The
+// published proof must be the manifest alone; the anchor is that block's own
+// hash, so thinning the bag preserves it.
+test('the font bundle proof carries the manifest and nothing else', async () => {
+  const car = await readFile(new URL('fonts.car', dataDir));
+  assert.equal(await carBlockCount(car), 1);
+  assert.ok(car.length < 64 * 1024, `fonts.car is ${car.length} B; the proof should be tiny`);
+});
+
+test('the MASL font bundle authenticates a glyph fetched as its own file', async () => {
+  const reads = [];
+  const recording = (url, opts) => {
+    reads.push(String(url));
+    return fetchFn(url, opts);
+  };
+  const fonts = new VerifiedAsset({ cid: fontsCid, source: 'fonts', fetchFn: recording });
   const glyph = await fonts.bytes('Noto Sans Regular/0-255.pbf');
   const expected = await readFile(join(new URL('.', dataDir).pathname, 'fonts', 'Noto Sans Regular', '0-255.pbf'));
   assert.deepEqual(glyph, new Uint8Array(expected));
   assert.ok(fonts.stats.verified > 0);
+  assert.ok(reads.some((url) => url.endsWith('.pbf')), 'the glyph must come from its published file');
 });
