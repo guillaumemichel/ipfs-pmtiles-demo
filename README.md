@@ -51,23 +51,21 @@ different times:
 `?hints=<url>` consults a different document first and falls back to the
 packaged one.
 
-## The `fonts.car` Fix
+## The Font Bundle
 
-`assets/fonts.car` is a *proof*: the MASL manifest block and nothing else,
-32,214 B for 256 glyphs. It used to be 6,282,283 B, because veritiles'
-`pack -- assets` inlines every file smaller than the 8 MiB CARv1 raw-section
-cap as an optional raw block, with no threshold and no way to opt out. That
-turned the proof into a second complete copy of the glyph directory, which the
-client downloaded whole before the first text label could render — and made the
-demo publish every glyph twice.
+`assets/fonts.car` is a *proof*, not a payload: the MASL manifest block alone,
+32,214 B covering 256 glyphs. The glyphs themselves stay ordinary files under
+`assets/fonts/`, fetched one at a time and hashed against the manifest as a
+label needs them.
 
-The bundle anchor is the sha2-256 of the manifest block alone, so dropping the
-raw sections is lossless and the anchor is unchanged. `scripts/lib/thin-car.js`
-does it; the build applies it on every run and asserts the result is a single
-block, so a future repack cannot quietly reintroduce the bloat. Per veritiles
-`SPEC.md` §3.2 the raw blocks are optional and the client falls back to
-`{base}/{path}`, which is what makes the glyphs above genuinely lazy: only the
-ranges a label needs are fetched, and each is hashed against the manifest.
+A bundle CAR may also carry the content inline as optional raw blocks
+(veritiles `SPEC.md` §3.2); for a 6.24 MB glyph directory that would mean
+publishing every byte twice and downloading the whole bundle before the first
+label could render. Keeping the bag to the manifest is what makes the glyph
+reads lazy, and it is free: the bundle anchor is the sha2-256 of the manifest
+block itself, so which raw sections travel beside it never changes the anchor.
+`scripts/lib/thin-car.js` reduces a bag to that form and the build applies it
+on every run, asserting the published proof is a single block.
 
 ## Build And Verify
 
@@ -109,9 +107,9 @@ npm run pack -- assets /path/to/data/fonts --out /path/to/data/fonts.car
 ```
 
 Copy the three printed anchors into `index.html` and run `npm test && npm run build`;
-the build rewrites both hints documents around them. The `pack -- assets` output
-will be inflated with inlined glyph bytes as described above — the build thins it
-when publishing, and `data/fonts.car` is checked in already thinned.
+the build rewrites both hints documents around them. `data/fonts.car` is checked
+in as the manifest alone, and the build reduces the bundle proof to that form
+when publishing however the packer emitted it.
 
 `--unixfs` embeds the standard 256 KiB UnixFS root in each PMTiles descriptor;
 the `--full-car` outputs are pinnable publication artifacts in `build/`.
