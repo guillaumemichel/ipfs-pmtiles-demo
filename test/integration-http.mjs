@@ -37,6 +37,14 @@ const fetchFn = (url, opts) => {
 };
 
 try {
+  // The page loads no third-party script: every vendor/ file it names, and the
+  // worker maplibre-gl.mjs starts from beside itself, is served with the site.
+  assert.doesNotMatch(page, /https?:\/\//, 'the page must not load from another host');
+  const vendored = [...page.matchAll(/\.\/(vendor\/[\w.-]+)/g)].map(([, path]) => path);
+  for (const path of [...vendored, 'vendor/maplibre-gl-worker.mjs']) {
+    assert.equal((await fetch(`${base}/${path}`)).status, 200, `${path} is not served`);
+  }
+
   const mapSource = new VerifiedSource({ cid: mapCid, hints, fetchFn });
   const map = new PMTiles(mapSource);
   assert.equal((await map.getHeader()).maxZoom, 6);

@@ -10,14 +10,15 @@
     "test:http": "node test/integration-http.mjs"
   },
   "dependencies": {
-    "@ipld/car": "5.4.6",
-    "@ipld/dag-pb": "4.1.7",
+    "@ipld/car": "5.4.7",
+    "@ipld/dag-pb": "4.2.0",
     "blockstore-core": "7.0.1",
     "hash-wasm": "4.12.0",
-    "ipfs-unixfs": "13.0.0",
-    "ipfs-unixfs-importer": "17.0.1",
-    "multiformats": "14.0.4",
-    "pmtiles": "4.4.1",
+    "ipfs-unixfs": "13.1.2",
+    "ipfs-unixfs-importer": "17.1.1",
+    "maplibre-gl": "6.14.0",
+    "multiformats": "14.0.5",
+    "pmtiles": "4.5.0",
     "veritiles": "0.5.0"
   }
 }

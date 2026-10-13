@@ -25,6 +25,17 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = join(repoRoot, 'data');
 const distDir = join(repoRoot, 'dist');
 
+// The page's third-party code, served beside it at the versions
+// package-lock.json pins, so the page loads nothing from a CDN.
+const vendored = {
+  'veritiles.js': 'veritiles/dist/index.js',
+  'maplibre-gl.mjs': 'maplibre-gl/dist/maplibre-gl.mjs',
+  // maplibre-gl.mjs starts its worker from the file beside it.
+  'maplibre-gl-worker.mjs': 'maplibre-gl/dist/maplibre-gl-worker.mjs',
+  'maplibre-gl.css': 'maplibre-gl/dist/maplibre-gl.css',
+  'pmtiles.js': 'pmtiles/dist/pmtiles.js',
+};
+
 const anchors = {
   map: 'bafyreif33ppi5uijec33dywz6z5cvdzmqd4vxvwof3eaveaedxfbbbur4e',
   elevation: 'bafyreifzoehwp7pjxlfngk2nhfqypc3xg65cws4apbokteajdhvr4u4apy',
@@ -75,7 +86,9 @@ async function main() {
   await writeFile(join(distDir, 'assets', 'hints.json'), await glyphHintsDocument(glyphs));
 
   await mkdir(join(distDir, 'vendor'), { recursive: true });
-  await copyFile(join(repoRoot, 'node_modules', 'veritiles', 'dist', 'index.js'), join(distDir, 'vendor', 'veritiles.js'));
+  for (const [name, path] of Object.entries(vendored)) {
+    await copyFile(join(repoRoot, 'node_modules', path), join(distDir, 'vendor', name));
+  }
 
   const pageTemplate = await readFile(join(repoRoot, 'index.html'), 'utf8');
   const stylePlaceholder = "style:     'STYLE_CID'";

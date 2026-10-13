@@ -22,7 +22,7 @@ assets/fonts.car          # 32 KB MASL bundle proof: the manifest, nothing else
 assets/fonts/             # the glyphs themselves, verified per file
 assets/hints.json         # glyph locations, found by discovery
 hints.json                # anchor and archive locations
-vendor/veritiles.js
+vendor/                   # veritiles, MapLibre GL (module + worker + css), pmtiles
 index.html
 ```
 
@@ -83,8 +83,10 @@ location configured anywhere else: representative byte ranges from both PMTiles
 files, the style, and all 256 glyphs. `npm run test:http` repeats that through
 the static HTTP server and asserts that map data uses `206` ranges, that the
 hints documents, proofs, and assets are whole-file `GET`s, that the glyph
-document is reached by discovery rather than by configuration, and that a
-tampered glyph is rejected.
+document is reached by discovery rather than by configuration, that a
+tampered glyph is rejected, and that the page loads no script from another
+host: the build copies each library from `node_modules/` at the version
+`package-lock.json` pins.
 
 Run locally with:
 

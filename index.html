@@ -4,21 +4,15 @@
     <meta charset='utf-8'>
     <title>Verified PMTiles Globe with 3D Terrain</title>
     <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no'>
-    <!-- maplibre + pmtiles: exact versions, SRI-pinned. The verified client is
-         the vendored veritiles bundle (self-contained ESM, no CDN deps) that
-         `npm run build` copies to vendor/ next to this page. -->
-    <script src='https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js'
-            integrity='sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp'
-            crossorigin='anonymous'></script>
-    <link href='https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css'
-          integrity='sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK'
-          crossorigin='anonymous' rel='stylesheet' />
-    <script src='https://unpkg.com/pmtiles@4.4.1/dist/pmtiles.js'
-            integrity='sha384-iS2/cbFYol4NsEeda4mW6N/8wPMOT6pv2eY+GNYSJRqVC4nbJECP1+mg6D2T8wT/'
-            crossorigin='anonymous'></script>
+    <!-- maplibre, pmtiles, and the verified client are vendored: `npm run build`
+         copies the versions package-lock.json pins to vendor/ next to this
+         page, so it loads no third-party script. -->
+    <link href='./vendor/maplibre-gl.css' rel='stylesheet' />
+    <script src='./vendor/pmtiles.js'></script>
     <script type='importmap'>
     {
         "imports": {
+            "maplibre-gl": "./vendor/maplibre-gl.mjs",
             "veritiles": "./vendor/veritiles.js"
         }
     }
@@ -38,6 +32,7 @@
     <div id='map'></div>
     <div id='badge'>loading…</div>
     <script type='module'>
+        import * as maplibregl from 'maplibre-gl';
         import { VerifiedSource, VerifiedAsset, assetProtocol } from 'veritiles';
 
         // The four CIDs are the only trust anchors, and the only thing this
