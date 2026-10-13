@@ -13,10 +13,11 @@
     "@ipld/car": "5.4.6",
     "@ipld/dag-pb": "4.1.7",
     "blockstore-core": "7.0.1",
+    "hash-wasm": "4.12.0",
     "ipfs-unixfs": "13.0.0",
     "ipfs-unixfs-importer": "17.0.1",
     "multiformats": "14.0.4",
     "pmtiles": "4.4.1",
-    "veritiles": "0.4.0"
+    "veritiles": "0.5.0"
   }
 }

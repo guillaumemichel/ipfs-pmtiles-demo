@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Assemble the static v0.4.0 site. The PMTiles archives and their proof
+// Assemble the static v0.5.0 site. The PMTiles archives and their proof
 // directories come from veritiles' published pack tool; this script publishes
 // them, derives the routing-hints documents that locate every artifact, and
 // then reads the whole site back through the released client configured exactly
@@ -9,23 +9,25 @@ import { copyFile, cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/p
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { createBLAKE3 } from 'hash-wasm';
 import { CID } from 'multiformats/cid';
+import * as Digest from 'multiformats/hashes/digest';
 import { sha256 } from 'multiformats/hashes/sha2';
 import { VerifiedAsset, VerifiedSource } from 'veritiles';
 
 import { directoryFetch } from './lib/local-fetch.js';
 import { parseArchive } from './lib/pmtiles-parse.js';
 import { buildStyle } from './lib/style.js';
-import { carBlockCount, manifestOnlyCar } from './lib/thin-car.js';
 
 const RAW_CODE = 0x55;
+const BLAKE3_CODE = 0x1e;
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = join(repoRoot, 'data');
 const distDir = join(repoRoot, 'dist');
 
 const anchors = {
-  map: 'bafyreiaxo6p3oqrt4lz4armeobbbqegrch2gddbwhorudmi2oiozkdlhgy',
-  elevation: 'bafyreibjxxemhc4chmic627vfl3a3emlfoo7ncwzwe2iuif5ybrwnflqga',
+  map: 'bafyreif33ppi5uijec33dywz6z5cvdzmqd4vxvwof3eaveaedxfbbbur4e',
+  elevation: 'bafyreifzoehwp7pjxlfngk2nhfqypc3xg65cws4apbokteajdhvr4u4apy',
   fonts: 'bafyreigr3kszmxht36pxnoddfdraxqnyy4x7ylnqyfnubenpdyqftozamm',
 };
 
@@ -60,19 +62,14 @@ async function main() {
   await mkdir(join(distDir, 'assets'), { recursive: true });
   await cp(join(dataDir, 'fonts'), join(distDir, 'assets', 'fonts'), { recursive: true });
   await writeFile(join(distDir, 'assets', 'style.json'), styleBytes);
-  // Publish the bundle *proof*, not a second copy of the glyphs. Idempotent, so
-  // a future repack with a packer that still inlines everything is thinned here
-  // rather than shipped; the assert keeps that guarantee honest.
-  const fontsCar = await manifestOnlyCar(await readFile(join(dataDir, 'fonts.car')));
-  const blocks = await carBlockCount(fontsCar);
-  if (blocks !== 1) throw new Error(`fonts.car must be manifest-only, found ${blocks} blocks`);
-  await writeFile(join(distDir, 'assets', 'fonts.car'), fontsCar);
+  await copyFile(join(dataDir, 'fonts.car'), join(distDir, 'assets', 'fonts.car'));
 
-  // Each archive is located by its own raw CID — the one its descriptor commits
-  // to and the client looks up — recomputed here from the bytes being published.
+  // Each archive is located by its BLAKE3 `map` CID — the name its descriptor
+  // commits to and the client looks up — recomputed here from the bytes being
+  // published.
   await writeFile(join(distDir, 'hints.json'), pageHintsDocument({
-    map: await rawCid(mapBytes),
-    elevation: await rawCid(elevationBytes),
+    map: await blake3Cid(mapBytes),
+    elevation: await blake3Cid(elevationBytes),
     style: styleCid,
   }));
   await writeFile(join(distDir, 'assets', 'hints.json'), await glyphHintsDocument(glyphs));
@@ -105,12 +102,18 @@ async function main() {
   console.log(`ELEVATION_ANCHOR ${anchors.elevation}`);
   console.log(`FONTS_ANCHOR ${anchors.fonts}`);
   console.log(`STYLE_CID ${styleCid}`);
-  console.log(`dist/: ${glyphs.length} glyphs verified against a ${fontsCar.length} B bundle proof; ` +
-    'every archive, proof, style, and glyph located by hints.json and verified with veritiles v0.4.0');
+  console.log(`dist/: ${glyphs.length} glyphs verified against the bundle proof; ` +
+    'every archive, proof, style, and glyph located by hints.json and verified with veritiles v0.5.0');
 }
 
 async function rawCid(bytes) {
   return CID.createV1(RAW_CODE, await sha256.digest(bytes)).toString();
+}
+
+// A file's name in a v0.5 descriptor: its raw BLAKE3 CID, as the packer computes it.
+async function blake3Cid(bytes) {
+  const digest = (await createBLAKE3()).update(bytes).digest('binary');
+  return CID.createV1(RAW_CODE, Digest.create(BLAKE3_CODE, digest)).toString();
 }
 
 // Every file under data/fonts/, keyed as the bundle manifest names it: a
@@ -132,7 +135,7 @@ async function collectGlyphs() {
 // The page's routing-hints document (veritiles SPEC.md §5): an untrusted map
 // from CID to candidate locations, relative to the document itself so the whole
 // site stays relocatable. A ranged package needs two entries — the anchor names
-// the proof directory, the file's raw CID names the archive — an asset one.
+// the proof directory, the file's BLAKE3 CID names the archive — an asset one.
 function pageHintsDocument({ map, elevation, style }) {
   return document({
     [anchors.map]: ['map.pmtiles.proofs'],

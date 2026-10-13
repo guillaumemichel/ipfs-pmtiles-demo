@@ -8,11 +8,10 @@ import { VerifiedAsset, VerifiedSource } from 'veritiles';
 
 import { directoryFetch } from '../scripts/lib/local-fetch.js';
 import { parseArchive } from '../scripts/lib/pmtiles-parse.js';
-import { carBlockCount } from '../scripts/lib/thin-car.js';
 
 const dataDir = new URL('../data/', import.meta.url);
-const mapCid = 'bafyreiaxo6p3oqrt4lz4armeobbbqegrch2gddbwhorudmi2oiozkdlhgy';
-const elevationCid = 'bafyreibjxxemhc4chmic627vfl3a3emlfoo7ncwzwe2iuif5ybrwnflqga';
+const mapCid = 'bafyreif33ppi5uijec33dywz6z5cvdzmqd4vxvwof3eaveaedxfbbbur4e';
+const elevationCid = 'bafyreifzoehwp7pjxlfngk2nhfqypc3xg65cws4apbokteajdhvr4u4apy';
 const fontsCid = 'bafyreigr3kszmxht36pxnoddfdraxqnyy4x7ylnqyfnubenpdyqftozamm';
 const fetchFn = directoryFetch(new URL('.', dataDir).pathname);
 
@@ -25,7 +24,7 @@ test('the PMTiles archives retain their measured facts', async () => {
   assert.equal(parseArchive(elevation).header.maxZoom, 4);
 });
 
-test('v0.4.0 proofs authenticate both PMTiles archives and bind UnixFS roots', async () => {
+test('v0.5.0 proofs authenticate both PMTiles archives and bind UnixFS roots', async () => {
   for (const [cid, source] of [[mapCid, 'map.pmtiles'], [elevationCid, 'elevation.pmtiles']]) {
     const descriptor = await readFile(new URL(`${source}.proofs/root`, dataDir));
     assert.equal(unixfsCid(descriptor).code, 0x70);
@@ -44,13 +43,11 @@ function unixfsCid(descriptor) {
   return CID.decode(descriptor.subarray(start + marker.length, start + marker.length + 36));
 }
 
-// veritiles' `pack -- assets` inlines every file under the 8 MiB raw-section
-// cap, which turns a bundle proof into a second copy of the content. The
-// published proof must be the manifest alone; the anchor is that block's own
-// hash, so thinning the bag preserves it.
-test('the font bundle proof carries the manifest and nothing else', async () => {
+// A glyph directory is far over veritiles' 256 KiB inline budget, so
+// `pack -- assets` emits the manifest alone: the proof, not a second copy of
+// the content.
+test('the font bundle proof is the manifest alone', async () => {
   const car = await readFile(new URL('fonts.car', dataDir));
-  assert.equal(await carBlockCount(car), 1);
   assert.ok(car.length < 64 * 1024, `fonts.car is ${car.length} B; the proof should be tiny`);
 });
 

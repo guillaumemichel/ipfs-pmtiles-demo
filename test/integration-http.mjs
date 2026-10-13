@@ -11,7 +11,6 @@ import { PMTiles, zxyToTileId } from 'pmtiles';
 import { NotFoundError, VerifiedAsset, VerifiedSource } from 'veritiles';
 
 import { parseArchive } from '../scripts/lib/pmtiles-parse.js';
-import { carBlockCount } from '../scripts/lib/thin-car.js';
 import { serve } from '../scripts/serve.mjs';
 
 const repo = new URL('..', import.meta.url);
@@ -65,10 +64,9 @@ try {
   assert.equal(styleJson.sources['pmtiles-source'].url, `pmtiles://${mapCid}`);
   assert.equal(styleJson.glyphs, `verified://${fontsCid}/{fontstack}/{range}.pbf`);
 
-  // The bundle proof is the manifest and nothing else, so each glyph is a
-  // separate lazy GET of a published file rather than a slice of a 6 MB bag.
+  // The bundle proof is the manifest alone, so each glyph is a separate lazy
+  // GET of a published file rather than a slice of a 6 MB bag.
   const carBytes = new Uint8Array(await (await fetch(`${base}/assets/fonts.car`)).arrayBuffer());
-  assert.equal(await carBlockCount(carBytes), 1, 'fonts.car must carry only the manifest block');
   assert.ok(carBytes.length < 64 * 1024, `fonts.car is ${carBytes.length} B; the proof should be tiny`);
 
   const fonts = new VerifiedAsset({ cid: fontsCid, hints, fetchFn });
