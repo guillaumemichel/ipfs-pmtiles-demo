@@ -97,6 +97,7 @@ async function main() {
   }
   const page = pageTemplate.replace(stylePlaceholder, `style:     '${styleCid}'`);
   await writeFile(join(distDir, 'index.html'), page);
+  await copyFile(join(repoRoot, 'preview.jpg'), join(distDir, 'preview.jpg'));
 
   // Read the site back the way the page does: anchors only, every location
   // resolved through the hints documents just written.

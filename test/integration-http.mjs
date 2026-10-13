@@ -39,9 +39,11 @@ const fetchFn = (url, opts) => {
 try {
   // The page loads no third-party script: every vendor/ file it names, and the
   // worker maplibre-gl.mjs starts from beside itself, is served with the site.
-  assert.doesNotMatch(page, /https?:\/\//, 'the page must not load from another host');
+  // Only the link-preview <meta> tags may name a host; the page never loads them.
+  const loaded = page.replace(/<meta [^>]*>/g, '');
+  assert.doesNotMatch(loaded, /https?:\/\//, 'the page must not load from another host');
   const vendored = [...page.matchAll(/\.\/(vendor\/[\w.-]+)/g)].map(([, path]) => path);
-  for (const path of [...vendored, 'vendor/maplibre-gl-worker.mjs']) {
+  for (const path of [...vendored, 'vendor/maplibre-gl-worker.mjs', 'preview.jpg']) {
     assert.equal((await fetch(`${base}/${path}`)).status, 200, `${path} is not served`);
   }
 

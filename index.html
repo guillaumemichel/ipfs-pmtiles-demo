@@ -4,6 +4,15 @@
     <meta charset='utf-8'>
     <title>Verified PMTiles Globe with 3D Terrain</title>
     <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no'>
+    <!-- Link preview (Bluesky, Mastodon, …). Crawlers need absolute URLs, so
+         these name the GitHub Pages deployment wherever the page is served. -->
+    <meta property='og:type' content='website'>
+    <meta property='og:url' content='https://guillaumemichel.github.io/ipfs-pmtiles-demo/'>
+    <meta property='og:title' content='Verified PMTiles Globe with 3D Terrain'>
+    <meta property='og:description' content='A MapLibre globe that checks every map tile, terrain tile, style and glyph against its content hash before rendering it. Served from plain static hosting.'>
+    <meta property='og:image' content='https://guillaumemichel.github.io/ipfs-pmtiles-demo/preview.jpg'>
+    <meta property='og:image:alt' content='Tilted 3D view of the Alps on the globe, with a "hashes verified" badge'>
+    <meta name='twitter:card' content='summary_large_image'>
     <!-- maplibre, pmtiles, and the verified client are vendored: `npm run build`
          copies the versions package-lock.json pins to vendor/ next to this
          page, so it loads no third-party script. -->

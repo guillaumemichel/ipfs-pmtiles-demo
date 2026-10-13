@@ -24,6 +24,7 @@ assets/hints.json         # glyph locations, found by discovery
 hints.json                # anchor and archive locations
 vendor/                   # veritiles, MapLibre GL (module + worker + css), pmtiles
 index.html
+preview.jpg               # link-preview screenshot (og:image)
 ```
 
 ## Anchors In The Page, Locations In `hints.json`
