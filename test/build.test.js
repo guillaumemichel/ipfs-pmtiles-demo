@@ -13,6 +13,7 @@ const dataDir = new URL('../data/', import.meta.url);
 const mapCid = 'bafyreif33ppi5uijec33dywz6z5cvdzmqd4vxvwof3eaveaedxfbbbur4e';
 const elevationCid = 'bafyreifzoehwp7pjxlfngk2nhfqypc3xg65cws4apbokteajdhvr4u4apy';
 const fontsCid = 'bafyreigr3kszmxht36pxnoddfdraxqnyy4x7ylnqyfnubenpdyqftozamm';
+const spritesCid = 'bafyreiaqclllimqvvs2g6de3lsets5eipabbwc5bsmdq7yibnkfboot6sm';
 const fetchFn = directoryFetch(new URL('.', dataDir).pathname);
 
 test('the PMTiles archives retain their measured facts', async () => {
@@ -63,4 +64,20 @@ test('the MASL font bundle authenticates a glyph fetched as its own file', async
   assert.deepEqual(glyph, new Uint8Array(expected));
   assert.ok(fonts.stats.verified > 0);
   assert.ok(reads.some((url) => url.endsWith('.pbf')), 'the glyph must come from its published file');
+});
+
+// The sprite sheet is small enough to travel inside its proof: one GET brings
+// every icon, each file still hashed against the manifest.
+test('the sprite bundle carries and authenticates every sprite file', async () => {
+  const reads = [];
+  const recording = (url, opts) => {
+    reads.push(String(url));
+    return fetchFn(url, opts);
+  };
+  const sprites = new VerifiedAsset({ cid: spritesCid, source: 'sprites', fetchFn: recording });
+  for (const file of ['light.json', 'light.png', 'light@2x.json', 'light@2x.png']) {
+    const expected = await readFile(join(new URL('.', dataDir).pathname, 'sprites', file));
+    assert.deepEqual(await sprites.bytes(file), new Uint8Array(expected), file);
+  }
+  assert.deepEqual(reads.map((url) => url.split('/').pop()), ['sprites.car']);
 });

@@ -22,7 +22,8 @@
     {
         "imports": {
             "maplibre-gl": "./vendor/maplibre-gl.mjs",
-            "veritiles": "./vendor/veritiles.js"
+            "veritiles": "./vendor/veritiles.js",
+            "@anymirror/fisl-router": "./vendor/fisl-router/index.js"
         }
     }
     </script>
@@ -43,26 +44,43 @@
     <script type='module'>
         import * as maplibregl from 'maplibre-gl';
         import { VerifiedSource, VerifiedAsset, assetProtocol } from 'veritiles';
+        import { fisl } from '@anymirror/fisl-router';
+        import { swapArchive } from './web/full.js';
 
-        // The four CIDs are the only trust anchors, and the only thing this
-        // page carries — no URL appears below. Locations come from `hints.json`
+        // The CIDs are the only trust anchors. Locations come from `hints.json`
         // beside this page (the client's default routing-hints document), an
         // untrusted file whose every URL is still verified against these
         // anchors, and for the individual glyphs from a second document the
         // client discovers beside the font bundle. `npm run build` derives all
         // of it, and checks these anchors against the packaged artifacts.
+        // `full` names the full-resolution archives, which hints.json does not
+        // locate: the content router at `index` finds their hosts. Unset, the
+        // page shows the small set.
         const config = {
             map:       'bafyreif33ppi5uijec33dywz6z5cvdzmqd4vxvwof3eaveaedxfbbbur4e',
             elevation: 'bafyreifzoehwp7pjxlfngk2nhfqypc3xg65cws4apbokteajdhvr4u4apy',
             fonts:     'bafyreigr3kszmxht36pxnoddfdraxqnyy4x7ylnqyfnubenpdyqftozamm',
+            sprites:   'bafyreiaqclllimqvvs2g6de3lsets5eipabbwc5bsmdq7yibnkfboot6sm',
             style:     'STYLE_CID',
+            full: {
+                map:       'bafyreib4mkuic6epif3kssxiamqv3ujxjsuwixbbjf5zu6ptumdfj67rty', // the Protomaps planet, z0–15
+                elevation: 'bafyreihlrxpbirojw363t3hc77dpprvu3aistfyv3bzc45io66bwvejwai', // Mapterhorn's planet, z0–12
+                index:     'https://index.content-router.com',
+            },
         };
+
+        // Credits for the data on screen, whichever set shows it: the
+        // archives' own metadata may carry none.
+        const attribution = [
+            '<a href="https://protomaps.com">Protomaps</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
+            '<a href="https://mapterhorn.com/attribution">© Mapterhorn</a>',
+        ];
 
         // ?hints=<url> consults another routing-hints document first, then the
         // packaged one — relocating every artifact at once, without touching an
         // anchor. ?tamper=1 corrupts a deterministic ~1/6 of tile (range)
         // responses and ~1/6 of glyph (.pbf) responses to show that tampered
-        // bytes are rejected, never rendered.
+        // bytes are rejected, never rendered. ?small keeps the small set.
         const params = new URLSearchParams(location.search);
         const tamper = params.has('tamper');
         const hints = params.has('hints')
@@ -103,28 +121,61 @@
         };
         const fetchFn = tamper ? tamperFetch : undefined;
 
-        // Two range-verified packages and two verified assets, one anchor each.
+        // Two range-verified packages and three verified assets, one anchor
+        // each: the small set, which the verified style names.
         const mapSource = new VerifiedSource({ cid: config.map, hints, fetchFn });
         const elevationSource = new VerifiedSource({ cid: config.elevation, hints, fetchFn });
         const fonts = new VerifiedAsset({ cid: config.fonts, hints, fetchFn });
+        const sprites = new VerifiedAsset({ cid: config.sprites, hints, fetchFn });
         const styleAsset = new VerifiedAsset({ cid: config.style, hints, fetchFn });
-        window.verified = { map: mapSource, elevation: elevationSource, fonts, style: styleAsset };
+        const sources = [mapSource, elevationSource, fonts, sprites, styleAsset];
+        window.verified = { map: mapSource, elevation: elevationSource, fonts, sprites, style: styleAsset };
+
+        // The full archives open at once, located by the content router alone;
+        // each takes its layer over below, once it and the map are ready.
+        const FULL_EXAGGERATION = 1.5; // the full DEM needs no lift; the small one's z4 relief does
+        const router = fisl({ url: config.full.index });
+        const openFull = async (cid) => {
+            if (!cid || params.has('small')) return undefined;
+            const source = new VerifiedSource({ cid, hints, router, fetchFn });
+            const archive = new pmtiles.PMTiles(source);
+            await archive.getHeader();
+            return { cid, source, archive };
+        };
+        const unavailable = (cid) => (err) => console.warn(`full resolution unavailable for ${cid}:`, err);
+        const fullMap = openFull(config.full.map).catch(unavailable(config.full.map));
+        const fullElevation = openFull(config.full.elevation).catch(unavailable(config.full.elevation));
+
+        // Aborted once its layer's full archive takes over: every read of the
+        // small archive still in flight stops then.
+        const retired = { [config.map]: new AbortController(), [config.elevation]: new AbortController() };
 
         // Order matters: every protocol must be registered before the map
         // requests pmtiles://<key> / verified://<anchor>/… / elevation://….
         const protocol = new pmtiles.Protocol();
-        maplibregl.addProtocol('pmtiles', protocol.tile);
         protocol.add(new pmtiles.PMTiles(mapSource));
-        maplibregl.addProtocol('verified', assetProtocol([fonts]));
+        protocol.add(new pmtiles.PMTiles(elevationSource));
+        // tilev4, not tile: tile takes anything but an AbortController for an
+        // old-style callback, and the joined abort is a bare signal.
+        const tile = (params, controller) => {
+            const retiring = retired[/^pmtiles:\/\/([^/]+)/.exec(params.url)?.[1]]?.signal;
+            return protocol.tilev4(params, retiring ? { signal: AbortSignal.any([controller.signal, retiring]) } : controller);
+        };
+        maplibregl.addProtocol('pmtiles', tile);
 
-        // The elevation archive rides the same pmtiles protocol, wrapped so a
+        maplibregl.addProtocol('verified', assetProtocol([fonts, sprites]));
+
+        // The elevation archives ride the same pmtiles protocol, wrapped so a
         // tile absent from the archive (pure-ocean regions) rejects: MapLibre
         // then leaves that tile at sea level instead of choking on an empty
-        // DEM payload.
-        protocol.add(new pmtiles.PMTiles(elevationSource));
-        maplibregl.addProtocol('elevation', async (params, abortController) => {
-            const url = params.url.replace('elevation://', `pmtiles://${config.elevation}/`);
-            const response = await protocol.tile({ ...params, url }, abortController);
+        // DEM payload. An archive's TileJSON names its tiles through the
+        // wrapper too.
+        maplibregl.addProtocol('elevation', async (params, controller) => {
+            const response = await tile({ ...params, url: params.url.replace('elevation://', 'pmtiles://') }, controller);
+            if (params.type === 'json') {
+                const tiles = response.data.tiles.map((url) => url.replace('pmtiles://', 'elevation://'));
+                return { data: { ...response.data, tiles } };
+            }
             if (!response.data) {
                 // Pure-ocean region: no DEM tile in the archive. Throwing (vs.
                 // returning empty data) makes MapLibre leave the tile at sea
@@ -138,9 +189,8 @@
         });
 
         // The style is a verified raw asset: fetch, hash against STYLE_CID,
-        // parse. Its pmtiles:// / verified:// / elevation:// references and the
-        // raster-dem maxzoom were baked into it at build time from the same
-        // CIDs and the elevation archive header.
+        // parse. Its pmtiles:// / verified:// / elevation:// references were
+        // baked into it at build time from the small set's CIDs.
         const style = JSON.parse(new TextDecoder().decode(await styleAsset.bytes('')));
 
         const map = new maplibregl.Map({
@@ -148,24 +198,51 @@
             style: style,
             center: [0, 20],
             zoom: 1.5,
-            maxPitch: 85
+            maxPitch: 85,
+            attributionControl: { customAttribution: attribution },
         });
         map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }));
         window.map = map; // console access
+
+        // The small set paints first. A full archive that opens takes its layer
+        // over once the map is idle, the small set's tiles in view loaded or
+        // failed: the layer's sources reload from it in place, the small tiles
+        // drawn until the full ones arrive, and the small archive's reads
+        // stop. Taking over sooner would stop small reads with nothing drawn
+        // yet. One that never opens leaves the small set.
+        const painted = new Promise((ok) => map.once('idle', ok));
+        const shown = { map: false, elevation: false };
+        const takeOver = async (layer, small, opening) => {
+            const full = await opening;
+            if (!full) return;
+            await painted;
+            protocol.add(full.archive);
+            sources.push(full.source);
+            swapArchive(map, small, full.cid);
+            retired[small].abort();
+            if (layer === 'elevation') map.setTerrain({ ...map.getTerrain(), exaggeration: FULL_EXAGGERATION });
+            shown[layer] = true;
+        };
+        takeOver('map', config.map, fullMap);
+        takeOver('elevation', config.elevation, fullElevation);
+        const label = () => shown.map && shown.elevation ? 'full resolution'
+            : shown.map ? 'full map, small terrain'
+            : shown.elevation ? 'small map, full terrain'
+            : 'small set';
 
         const badge = document.getElementById('badge');
         let diagnostic = '';
         let withheld = 0; // responses that failed to fetch without a verification reject
         setInterval(() => {
             if (diagnostic) { badge.innerHTML = diagnostic; return; }
-            const all = [mapSource, elevationSource, fonts, styleAsset];
-            const verified = all.reduce((n, s) => n + s.stats.verified, 0);
-            const rejected = all.reduce((n, s) => n + s.stats.rejected, 0);
+            const verified = sources.reduce((n, s) => n + s.stats.verified, 0);
+            const rejected = sources.reduce((n, s) => n + s.stats.rejected, 0);
             // Withheld vs tampered surface differently: a rejected hash is a
             // tamper; a withheld response is a fetch failure.
             badge.innerHTML = `✓ ${verified} hashes verified` +
                 (rejected ? ` / <span class="rejected">✗ ${rejected} tampered</span>` : '') +
-                (withheld ? ` / <span class="rejected">⚠ ${withheld} unavailable</span>` : '');
+                (withheld ? ` / <span class="rejected">⚠ ${withheld} unavailable</span>` : '') +
+                ` · ${label()}`;
         }, 500);
 
         const findError = (err, name, depth = 0) => {
@@ -185,12 +262,14 @@
             if (findError(err, 'RangeBlockedError')) {
                 diagnostic = '<span class="rejected">✗ host refuses cross-origin range ' +
                     'requests in this browser</span>';
-            } else if (findError(err, 'NotFoundError') || findError(err, 'ElevationAbsentError')) {
+            } else if (findError(err, 'NotFoundError') || findError(err, 'ElevationAbsentError') || findError(err, 'AbortError')) {
                 // Authenticated absence: a glyph range the artifact does not
                 // contain, or a DEM tile absent from the elevation archive
                 // (pure ocean). assetProtocol already resolves absent glyph
                 // ranges to empty and MapLibre renders ocean at sea level;
                 // both are benign misses, not tampers — leave the badge alone.
+                // So is a small archive's read that stopped as its full one
+                // took over.
             } else if (findError(err, 'AggregateError') && !findError(err, 'VerificationError')) {
                 // A source failure with no verification reject = withholding.
                 withheld++;

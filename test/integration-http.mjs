@@ -22,6 +22,7 @@ const mapCid = cidFor('map');
 const elevationCid = cidFor('elevation');
 const fontsCid = cidFor('fonts');
 const styleCid = cidFor('style');
+const spritesCid = cidFor('sprites');
 const mapBytes = await readFile(new URL('map.pmtiles', dataDir));
 const elevationBytes = await readFile(new URL('elevation.pmtiles', dataDir));
 
@@ -37,13 +38,20 @@ const fetchFn = (url, opts) => {
 };
 
 try {
-  // The page loads no third-party script: every vendor/ file it names, and the
-  // worker maplibre-gl.mjs starts from beside itself, is served with the site.
-  // Only the link-preview <meta> tags may name a host; the page never loads them.
-  const loaded = page.replace(/<meta [^>]*>/g, '');
-  assert.doesNotMatch(loaded, /https?:\/\//, 'the page must not load from another host');
-  const vendored = [...page.matchAll(/\.\/(vendor\/[\w.-]+)/g)].map(([, path]) => path);
-  for (const path of [...vendored, 'vendor/maplibre-gl-worker.mjs', 'preview.jpg']) {
+  // The page loads no third-party code: every script, stylesheet and module it
+  // names is a path on the site and served with it, as is the worker
+  // maplibre-gl.mjs starts from beside itself. Other hosts appear as data
+  // only: the content router, the attribution links, the link-preview tags.
+  const importmap = JSON.parse(page.match(/<script type='importmap'>([^<]*)<\/script>/)[1]).imports;
+  const loads = [
+    ...[...page.matchAll(/<(?:script|link)\b[^>]*\b(?:src|href)='([^']*)'/g)].map(([, url]) => url),
+    ...Object.values(importmap),
+    ...[...page.matchAll(/^\s*import\b[^'"]*'(\.[^']+)'/gm)].map(([, url]) => url),
+  ];
+  for (const url of loads) {
+    assert.ok(url.startsWith('./'), `the page loads ${url} from elsewhere`);
+  }
+  for (const path of [...loads.map((url) => url.slice(2)), 'vendor/maplibre-gl-worker.mjs', 'preview.jpg']) {
     assert.equal((await fetch(`${base}/${path}`)).status, 200, `${path} is not served`);
   }
 
@@ -73,6 +81,14 @@ try {
   const styleJson = JSON.parse(new TextDecoder().decode(await style.bytes()));
   assert.equal(styleJson.sources['pmtiles-source'].url, `pmtiles://${mapCid}`);
   assert.equal(styleJson.glyphs, `verified://${fontsCid}/{fontstack}/{range}.pbf`);
+  assert.equal(styleJson.sprite, `verified://${spritesCid}/light`);
+
+  // The sprite sheet travels inside its proof, each file still verified.
+  const sprites = new VerifiedAsset({ cid: spritesCid, hints, fetchFn });
+  assert.deepEqual(
+    await sprites.bytes('light.json'),
+    new Uint8Array(await readFile(new URL('sprites/light.json', dataDir))),
+  );
 
   // The bundle proof is the manifest alone, so each glyph is a separate lazy
   // GET of a published file rather than a slice of a 6 MB bag.
@@ -97,6 +113,7 @@ try {
   assert.ok(fetched.some(({ url }) => url.endsWith('/map.pmtiles.proofs/root')));
   assert.ok(fetched.some(({ url }) => url.endsWith('/elevation.pmtiles.proofs/root')));
   assert.ok(fetched.some(({ url }) => url.endsWith('/assets/fonts.car')));
+  assert.ok(fetched.some(({ url }) => url.endsWith('/assets/sprites.car')));
   assert.ok(fetched.some(({ url }) => url.endsWith('/assets/style.json')));
   assert.ok(fetched.some(({ url, range }) => url.endsWith('.pmtiles') && range));
   // The page never names the glyph document: the client finds it by probing the

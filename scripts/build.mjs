@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Assemble the static v0.5.0 site. The PMTiles archives and their proof
+// Assemble the static site. The PMTiles archives and their proof
 // directories come from veritiles' published pack tool; this script publishes
 // them, derives the routing-hints documents that locate every artifact, and
 // then reads the whole site back through the released client configured exactly
@@ -16,7 +16,6 @@ import { sha256 } from 'multiformats/hashes/sha2';
 import { VerifiedAsset, VerifiedSource } from 'veritiles';
 
 import { directoryFetch } from './lib/local-fetch.js';
-import { parseArchive } from './lib/pmtiles-parse.js';
 import { buildStyle } from './lib/style.js';
 
 const RAW_CODE = 0x55;
@@ -36,10 +35,16 @@ const vendored = {
   'pmtiles.js': 'pmtiles/dist/pmtiles.js',
 };
 
+// Packages of several modules, copied whole: their files import each other.
+const vendoredDirs = {
+  'fisl-router': '@anymirror/fisl-router/dist',
+};
+
 const anchors = {
   map: 'bafyreif33ppi5uijec33dywz6z5cvdzmqd4vxvwof3eaveaedxfbbbur4e',
   elevation: 'bafyreifzoehwp7pjxlfngk2nhfqypc3xg65cws4apbokteajdhvr4u4apy',
   fonts: 'bafyreigr3kszmxht36pxnoddfdraxqnyy4x7ylnqyfnubenpdyqftozamm',
+  sprites: 'bafyreiaqclllimqvvs2g6de3lsets5eipabbwc5bsmdq7yibnkfboot6sm',
 };
 
 // `directoryFetch` keys on the path alone; the origin exists only to give the
@@ -53,15 +58,18 @@ const glyphHints = `${distOrigin}/assets/hints.json`;
 async function main() {
   const mapBytes = await readFile(join(dataDir, 'map.pmtiles'));
   const elevationBytes = await readFile(join(dataDir, 'elevation.pmtiles'));
-  const elevation = parseArchive(elevationBytes);
   const style = buildStyle({
     mapAnchor: anchors.map,
+    elevationAnchor: anchors.elevation,
     fontsAnchor: anchors.fonts,
-    elevationMaxZoom: elevation.header.maxZoom,
+    spritesAnchor: anchors.sprites,
   });
-  const styleBytes = Buffer.from(`${JSON.stringify(style, null, 2)}\n`);
+  // Minified: a raw asset is read whole, 256 KiB at most, and the basemap's
+  // label expressions run long.
+  const styleBytes = Buffer.from(`${JSON.stringify(style)}\n`);
   const styleCid = await rawCid(styleBytes);
-  const glyphs = await collectGlyphs();
+  const glyphs = await collectFiles('fonts');
+  const spriteFiles = await collectFiles('sprites');
 
   await rm(distDir, { recursive: true, force: true });
   await mkdir(distDir, { recursive: true });
@@ -74,6 +82,7 @@ async function main() {
   await cp(join(dataDir, 'fonts'), join(distDir, 'assets', 'fonts'), { recursive: true });
   await writeFile(join(distDir, 'assets', 'style.json'), styleBytes);
   await copyFile(join(dataDir, 'fonts.car'), join(distDir, 'assets', 'fonts.car'));
+  await copyFile(join(dataDir, 'sprites.car'), join(distDir, 'assets', 'sprites.car'));
 
   // Each archive is located by its BLAKE3 `map` CID — the name its descriptor
   // commits to and the client looks up — recomputed here from the bytes being
@@ -89,6 +98,13 @@ async function main() {
   for (const [name, path] of Object.entries(vendored)) {
     await copyFile(join(repoRoot, 'node_modules', path), join(distDir, 'vendor', name));
   }
+  for (const [name, path] of Object.entries(vendoredDirs)) {
+    await cp(join(repoRoot, 'node_modules', path), join(distDir, 'vendor', name), {
+      recursive: true,
+      filter: (source) => !source.endsWith('.d.ts'),
+    });
+  }
+  await cp(join(repoRoot, 'web'), join(distDir, 'web'), { recursive: true });
 
   const pageTemplate = await readFile(join(repoRoot, 'index.html'), 'utf8');
   const stylePlaceholder = "style:     'STYLE_CID'";
@@ -109,15 +125,16 @@ async function main() {
   };
   await verifyArchive(anchors.map, 'map.pmtiles', mapBytes, fetchFn);
   await verifyArchive(anchors.elevation, 'elevation.pmtiles', elevationBytes, fetchFn);
-  await verifyAssets(styleCid, style, glyphs, fetchFn);
+  await verifyAssets(styleCid, style, glyphs, spriteFiles, fetchFn);
   assertReadShape(fetched, glyphs.length);
 
   console.log(`MAP_ANCHOR ${anchors.map}`);
   console.log(`ELEVATION_ANCHOR ${anchors.elevation}`);
   console.log(`FONTS_ANCHOR ${anchors.fonts}`);
+  console.log(`SPRITES_ANCHOR ${anchors.sprites}`);
   console.log(`STYLE_CID ${styleCid}`);
-  console.log(`dist/: ${glyphs.length} glyphs verified against the bundle proof; ` +
-    'every archive, proof, style, and glyph located by hints.json and verified with veritiles v0.5.0');
+  console.log(`dist/: ${glyphs.length} glyphs and ${spriteFiles.length} sprite files verified against their bundle proofs; ` +
+    'every archive, proof, style, glyph and sprite located by hints.json and verified with veritiles v0.6.1');
 }
 
 async function rawCid(bytes) {
@@ -130,20 +147,20 @@ async function blake3Cid(bytes) {
   return CID.createV1(RAW_CODE, Digest.create(BLAKE3_CODE, digest)).toString();
 }
 
-// Every file under data/fonts/, keyed as the bundle manifest names it: a
+// Every file under data/<bundle>/, keyed as the bundle manifest names it: a
 // '/'-joined path relative to the bundle root.
-async function collectGlyphs() {
-  const root = join(dataDir, 'fonts');
-  const glyphs = [];
+async function collectFiles(bundle) {
+  const root = join(dataDir, bundle);
+  const files = [];
   for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile()) continue;
     const absolute = join(entry.parentPath, entry.name);
-    glyphs.push({
+    files.push({
       path: relative(root, absolute).split(sep).join('/'),
       bytes: await readFile(absolute),
     });
   }
-  return glyphs.sort((a, b) => (a.path < b.path ? -1 : 1));
+  return files.sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
 // The page's routing-hints document (veritiles SPEC.md §5): an untrusted map
@@ -157,6 +174,7 @@ function pageHintsDocument({ map, elevation, style }) {
     [anchors.elevation]: ['elevation.pmtiles.proofs'],
     [elevation]: ['elevation.pmtiles'],
     [anchors.fonts]: ['assets/fonts.car'],
+    [anchors.sprites]: ['assets/sprites.car'],
     [style]: ['assets/style.json'],
   });
 }
@@ -164,8 +182,8 @@ function pageHintsDocument({ map, elevation, style }) {
 // Where each glyph in the bundle lives, keyed by the raw CID the manifest gives
 // it. This one is published *inside* assets/ rather than named by the page: the
 // client probes the directory holding the proof CAR when a resource location is
-// missing (SPEC.md §5 Discovery), so the page's own document stays six lines
-// and this one is fetched only once a label actually needs a glyph.
+// missing (SPEC.md §5 Discovery), so the page's own document stays short and
+// this one is fetched only once a label actually needs a glyph.
 async function glyphHintsDocument(glyphs) {
   const hints = {};
   for (const { path, bytes } of glyphs) {
@@ -189,7 +207,7 @@ async function verifyArchive(cid, name, expected, fetchFn) {
   }
 }
 
-async function verifyAssets(styleCid, style, glyphs, fetchFn) {
+async function verifyAssets(styleCid, style, glyphs, spriteFiles, fetchFn) {
   const styleAsset = new VerifiedAsset({ cid: styleCid, hints: pageHints, fetchFn });
   const parsed = JSON.parse(new TextDecoder().decode(await styleAsset.bytes()));
   if (parsed.sources['pmtiles-source'].url !== style.sources['pmtiles-source'].url) {
@@ -201,6 +219,11 @@ async function verifyAssets(styleCid, style, glyphs, fetchFn) {
   for (const { path, bytes } of glyphs) {
     const glyph = await fonts.bytes(path);
     if (!Buffer.from(glyph).equals(bytes)) throw new Error(`glyph did not round-trip: ${path}`);
+  }
+  // The sprite sheet travels inside its proof: every file comes out of it.
+  const sprites = new VerifiedAsset({ cid: anchors.sprites, hints: pageHints, fetchFn });
+  for (const { path, bytes } of spriteFiles) {
+    if (!Buffer.from(await sprites.bytes(path)).equals(bytes)) throw new Error(`sprite did not round-trip: ${path}`);
   }
 }
 

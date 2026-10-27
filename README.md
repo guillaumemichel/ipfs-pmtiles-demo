@@ -4,9 +4,11 @@
 
 This MapLibre globe verifies every fetched map tile, terrain tile, style file,
 font proof, and font glyph before rendering it. It uses
-[veritiles v0.5.0](https://github.com/guillaumemichel/veritiles/releases/tag/v0.5.0)
+[veritiles v0.6.1](https://github.com/guillaumemichel/veritiles/releases/tag/v0.6.1)
 with ordinary static hosting: GitHub Pages, an object store, or any HTTP server
-that supports single `Range` requests.
+that supports single `Range` requests. At full resolution the planet comes from
+a self-hosted server that a content router finds
+([Full Resolution](#full-resolution)).
 
 ## Published Layout
 
@@ -19,19 +21,25 @@ elevation.pmtiles
 elevation.pmtiles.proofs/
 assets/style.json         # raw-CID verified style
 assets/fonts.car          # 32 KB MASL bundle proof: the manifest, nothing else
+assets/sprites.car        # 52 KB MASL bundle: the basemap's icons, inside their proof
 assets/fonts/             # the glyphs themselves, verified per file
 assets/hints.json         # glyph locations, found by discovery
 hints.json                # anchor and archive locations
-vendor/                   # veritiles, MapLibre GL (module + worker + css), pmtiles
+vendor/                   # veritiles, MapLibre GL (module + worker + css), pmtiles,
+                          # and the FISL router (fisl-router/)
+web/full.js               # a full archive takes its layer over
 index.html
 preview.jpg               # link-preview screenshot (og:image)
 ```
 
 ## Anchors In The Page, Locations In `hints.json`
 
-The page inlines four trust anchors — map, elevation, font bundle, style — and
-no URL whatsoever. Locations live in routing-hints documents
-([veritiles `SPEC.md`](https://github.com/guillaumemichel/veritiles/blob/main/SPEC.md) §5),
+The page inlines five trust anchors — map, elevation, font bundle, sprite
+bundle, style — plus two for the full-resolution archives, and a single URL:
+the content router's, which locates those two ([Full
+Resolution](#full-resolution)). Every other location lives in routing-hints
+documents ([veritiles
+`SPEC.md`](https://github.com/guillaumemichel/veritiles/blob/main/SPEC.md) §5),
 which are untrusted and outside the root of trust: every byte they point at is
 verified against the anchor in the page, so a hostile document can misdirect a
 request but never alter a result that verifies. Moving the site to another host
@@ -40,10 +48,10 @@ is an edit to one JSON file and never touches a CID.
 Two documents, because they change on different cadences and are needed at
 different times:
 
-- **`hints.json`**, beside the page — the client's default document. Six
+- **`hints.json`**, beside the page — the client's default document. Seven
   entries: each archive's anchor names its proof directory and its BLAKE3
-  `map` CID names the archive, the font anchor names the bundle proof, the
-  style CID names the style.
+  `map` CID names the archive, each bundle anchor names its proof, the style
+  CID names the style.
 - **`assets/hints.json`** — one entry per glyph, mapping each resource's raw
   CID to its published file. The page never names this document; the client
   discovers it by probing the directory that holds `fonts.car` when a glyph
@@ -52,9 +60,48 @@ different times:
 `?hints=<url>` consults a different document first and falls back to the
 packaged one.
 
+## Full Resolution
+
+The page also names two full-resolution archives: the Protomaps planet (z0–15,
+139 GB) and Mapterhorn's planet (z0–12, 356 GB), served from a self-hosted
+server. GitHub Pages cannot hold them, and `hints.json` does not name them: the
+page asks a content router, the [FISL](https://dasl.ing/fisl.html) index at
+`index.content-router.com`, where they are, through
+[`@anymirror/fisl-router`](https://www.npmjs.com/package/@anymirror/fisl-router).
+The index is untrusted like the hints documents: every byte still verifies
+against the anchor in the page.
+
+The small set paints first, from GitHub Pages. The full archives open
+meanwhile, and each takes its layer, map or terrain, over once it opens and
+the small set is on screen: the layer's sources reload from the full archive
+in place, the small tiles stay drawn until the full ones arrive, and the
+small archive's reads still in flight stop. A full archive
+that never opens, because the index or the server is down, leaves its layer on
+the small set. The badge names what is shown; `?small` keeps the small set.
+Until `index.html` names the full anchors, the page shows the small set.
+
+Both sets share one verified style. It names every archive by anchor, the
+terrain's included, and takes each archive's max zoom from the archive's
+header. When the full terrain takes over, the page lowers its exaggeration
+from 3.5 to 1.5: the small set's z4 relief needs the lift, the full one does
+not. The page shows the credits for Protomaps, OpenStreetMap and Mapterhorn
+itself, since an archive's metadata may carry none.
+
+## The Style
+
+The layers are Protomaps' light basemap
+([`@protomaps/basemaps`](https://www.npmjs.com/package/@protomaps/basemaps)),
+the standard style for the schema of these tiles: roads and their names,
+places, points of interest, transit, buildings, land use. The terrain's
+hillshade lies under its water, and the 3D terrain under everything. Labels
+use the bundled Noto Sans Regular. Icons come from the light sprite sheet, a
+52 KB bundle verified like the fonts, whose files travel inside the proof:
+one `GET` brings them all. The style itself is published minified, since a
+raw asset is read whole, 256 KiB at most.
+
 ## The Font Bundle
 
-`assets/fonts.car` is a *proof*, not a payload: the MASL manifest block alone,
+`assets/fonts.car` is a _proof_, not a payload: the MASL manifest block alone,
 32,214 B covering 256 glyphs. The glyphs themselves stay ordinary files under
 `assets/fonts/`, fetched one at a time and hashed against the manifest as a
 label needs them.
@@ -108,13 +155,21 @@ npm install
 npm run pack -- /path/to/map.pmtiles --unixfs --full-car /path/to/build/map.car --out /path/to/data/map.pmtiles.proofs
 npm run pack -- /path/to/elevation.pmtiles --unixfs --full-car /path/to/build/elevation.car --out /path/to/data/elevation.pmtiles.proofs
 npm run pack -- assets /path/to/data/fonts --out /path/to/data/fonts.car
+npm run pack -- assets /path/to/data/sprites --out /path/to/data/sprites.car
 ```
 
-Copy the three printed anchors into `index.html`, `scripts/build.mjs`, and
+The sprite files are Protomaps' light sheet,
+`https://protomaps.github.io/basemaps-assets/sprites/v4/light{,@2x}.{json,png}`.
+Copy the four printed anchors into `index.html`, `scripts/build.mjs`, and
 `test/build.test.js`, then run `npm test && npm run build`; the build rewrites
 both hints documents around them, keying each archive by the BLAKE3 `map` CID
 it recomputes from the published bytes. The font anchor survives a repack of
 the same glyphs.
+
+The full-resolution archives are packed on the server that serves them, with
+veritiles' Rust packer (`packer/` in veritiles): `veritiles-pack planet.pmtiles`
+writes `planet.pmtiles.proofs/` beside the archive and prints the anchor to set
+under `full` in `index.html`.
 
 `--unixfs` embeds the standard 256 KiB UnixFS root in each PMTiles descriptor;
 the `--full-car` outputs are pinnable publication artifacts in `build/`. The
