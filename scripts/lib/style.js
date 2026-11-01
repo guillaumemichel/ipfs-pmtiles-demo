@@ -1,6 +1,6 @@
 // The MapLibre style, built from the freshly derived CIDs so its trust
 // references can never drift from the packages beside it. It ships as a
-// verified *raw asset* (veritiles SPEC.md A2): the client fetches and hashes it
+// verified *raw asset* (anymirror SPEC.md §3.1): the client fetches and hashes it
 // against STYLE_CID, then hands the parsed JSON to MapLibre. Every trust
 // reference inside points at a content-addressed identifier:
 //   - the vector source at pmtiles://<mapAnchor> (veritiles VerifiedSource),

@@ -10,7 +10,7 @@
     "test:http": "node test/integration-http.mjs"
   },
   "dependencies": {
-    "@anymirror/fisl-router": "0.6.0",
+    "@anymirror/fisl-router": "0.7.0",
     "@ipld/car": "5.4.7",
     "@ipld/dag-pb": "4.2.0",
     "@protomaps/basemaps": "5.7.2",
@@ -21,6 +21,6 @@
     "maplibre-gl": "6.16.0",
     "multiformats": "14.0.5",
     "pmtiles": "4.5.0",
-    "veritiles": "0.6.1"
+    "veritiles": "0.7.0"
   }
 }

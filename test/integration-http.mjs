@@ -117,7 +117,7 @@ try {
   assert.ok(fetched.some(({ url }) => url.endsWith('/assets/style.json')));
   assert.ok(fetched.some(({ url, range }) => url.endsWith('.pmtiles') && range));
   // The page never names the glyph document: the client finds it by probing the
-  // directory that holds the proof CAR (veritiles SPEC.md §5 Discovery).
+  // directory that holds the proof CAR (anymirror SPEC.md §5 Discovery).
   assert.ok(
     fetched.some(({ url }) => url === `${base}/assets/hints.json`),
     'the glyph hints document was never discovered',

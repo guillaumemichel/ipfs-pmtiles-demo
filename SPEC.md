@@ -4,16 +4,16 @@
 archive (PMTiles, 44,199,060 B, 2,905 leaves).
 
 > **Fonts and the style are no longer packages.** They are published as
-> **verified assets** and read by the [veritiles](https://github.com/guillaumemichel/veritiles)
+> **verified assets** and read by the [veritiles](https://github.com/anymirror-dev/anymirror/tree/main/packages/veritiles)
 > library (`VerifiedAsset`), whose format and client protocol are normative in
-> [`SPEC.md`](https://github.com/guillaumemichel/veritiles/blob/main/SPEC.md)
+> anymirror [`SPEC.md`](https://github.com/anymirror-dev/anymirror/blob/main/SPEC.md)
 > — a UnixFS directory anchored by a CARv1 proof (glyphs) or a raw ≤ 256 KiB
 > file that self-verifies (style). The **font-package** sections of this
 > document (§2 font layout, §5.3, the §6 font subsection, §9) are **superseded**
 > and kept only for historical reference. The **map package** below is current:
 > veritiles' `VerifiedSource` reads exactly this layout, and its normative
-> home is now [veritiles `SPEC.md`](https://github.com/guillaumemichel/veritiles/blob/main/SPEC.md)
-> too (Part 1, `Mn` sections; assets are Part 2, `An`). This document stays
+> home is now [anymirror `SPEC.md`](https://github.com/anymirror-dev/anymirror/blob/main/SPEC.md)
+> too (§2 ranged files; assets are §3). This document stays
 > as the build-pipeline companion.
 
 A _package_ is a directory of plain files published on any static host and
@@ -74,7 +74,7 @@ font package /ipfs/<rootCID>/    ← SUPERSEDED — fonts are now a verified ass
 The font-package layout above is superseded: glyphs now ship as a plain UnixFS
 directory `ipfs/<fontsRoot>/{stack}/{range}.pbf` with a structure-only proof
 beside it at `ipfs/<fontsRoot>.car`, anchored by the CAR CID
-(veritiles `VerifiedAsset`, veritiles `SPEC.md` Part 2). No `metadata.json`, no flat
+(veritiles `VerifiedAsset`, anymirror `SPEC.md` §3). No `metadata.json`, no flat
 `proofs` file.
 
 `{hex16}` is the 16-digit zero-padded lowercase hex of the **absolute byte
@@ -176,7 +176,7 @@ precision and far beyond any archive.
 
 ### 5.3 `proofs` (font packages) — SUPERSEDED
 
-> Superseded by veritiles verified assets (veritiles `SPEC.md` A5): a glyph
+> Superseded by veritiles verified assets (anymirror `SPEC.md` §3.2): a glyph
 > directory is now anchored by a CARv1 proof of its UnixFS nodes, not a flat
 > per-file digest table. Retained for historical reference.
 
@@ -226,7 +226,7 @@ the top `meta` file's content digest directly. `shardCapBytes` is build
 documentation — the client enforces the format's own 64 KiB cap instead.
 
 A **font package** adds (**SUPERSEDED** — fonts no longer carry a
-`metadata.json`; they are a verified asset, veritiles `SPEC.md` Part 2):
+`metadata.json`; they are a verified asset, anymirror `SPEC.md` §3):
 
 ```json
 {
@@ -312,7 +312,7 @@ leaves.
 
 ## 9. Client read protocol — font packages — SUPERSEDED
 
-> Superseded by veritiles `VerifiedAsset` (veritiles `SPEC.md` A7–A10): the proof
+> Superseded by veritiles `VerifiedAsset` (anymirror `SPEC.md` §3–§4): the proof
 > is now the glyph directory's CARv1 proof (fetched once, keyed by anchor), a
 > glyph read walks the proof to its leaf then does one plain GET, an absent
 > name is an authenticated absence (`NotFoundError`, mapped to an empty glyph

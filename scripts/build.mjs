@@ -27,7 +27,6 @@ const distDir = join(repoRoot, 'dist');
 // The page's third-party code, served beside it at the versions
 // package-lock.json pins, so the page loads nothing from a CDN.
 const vendored = {
-  'veritiles.js': 'veritiles/dist/index.js',
   'maplibre-gl.mjs': 'maplibre-gl/dist/maplibre-gl.mjs',
   // maplibre-gl.mjs starts its worker from the file beside it.
   'maplibre-gl-worker.mjs': 'maplibre-gl/dist/maplibre-gl-worker.mjs',
@@ -37,6 +36,8 @@ const vendored = {
 
 // Packages of several modules, copied whole: their files import each other.
 const vendoredDirs = {
+  'veritiles': 'veritiles/dist',
+  'anymirror-core': '@anymirror/core/dist',
   'fisl-router': '@anymirror/fisl-router/dist',
 };
 
@@ -50,7 +51,7 @@ const anchors = {
 // `directoryFetch` keys on the path alone; the origin exists only to give the
 // hints documents a base for their relative URLs, as the deployed page's own
 // origin does. The glyph document is never named — the client finds it by
-// probing the directory holding the proof CAR (veritiles SPEC.md §5).
+// probing the directory holding the proof CAR (anymirror SPEC.md §5).
 const distOrigin = 'http://dist.invalid';
 const pageHints = `${distOrigin}/hints.json`;
 const glyphHints = `${distOrigin}/assets/hints.json`;
@@ -134,7 +135,7 @@ async function main() {
   console.log(`SPRITES_ANCHOR ${anchors.sprites}`);
   console.log(`STYLE_CID ${styleCid}`);
   console.log(`dist/: ${glyphs.length} glyphs and ${spriteFiles.length} sprite files verified against their bundle proofs; ` +
-    'every archive, proof, style, glyph and sprite located by hints.json and verified with veritiles v0.6.1');
+    'every archive, proof, style, glyph and sprite located by hints.json and verified with veritiles v0.7.0');
 }
 
 async function rawCid(bytes) {
@@ -163,7 +164,7 @@ async function collectFiles(bundle) {
   return files.sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
-// The page's routing-hints document (veritiles SPEC.md §5): an untrusted map
+// The page's routing-hints document (anymirror SPEC.md §5): an untrusted map
 // from CID to candidate locations, relative to the document itself so the whole
 // site stays relocatable. A ranged package needs two entries — the anchor names
 // the proof directory, the file's BLAKE3 CID names the archive — an asset one.
@@ -182,7 +183,7 @@ function pageHintsDocument({ map, elevation, style }) {
 // Where each glyph in the bundle lives, keyed by the raw CID the manifest gives
 // it. This one is published *inside* assets/ rather than named by the page: the
 // client probes the directory holding the proof CAR when a resource location is
-// missing (SPEC.md §5 Discovery), so the page's own document stays short and
+// missing (anymirror SPEC.md §5 Discovery), so the page's own document stays short and
 // this one is fetched only once a label actually needs a glyph.
 async function glyphHintsDocument(glyphs) {
   const hints = {};
