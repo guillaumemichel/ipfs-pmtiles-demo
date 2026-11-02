@@ -166,17 +166,21 @@ async function collectFiles(bundle) {
 
 // The page's routing-hints document (anymirror SPEC.md §5): an untrusted map
 // from CID to candidate locations, relative to the document itself so the whole
-// site stays relocatable. A ranged package needs two entries — the anchor names
-// the proof directory, the file's BLAKE3 CID names the archive — an asset one.
+// site stays relocatable, then the same files on each mirror. A ranged package
+// needs two entries — the anchor names the proof directory, the file's BLAKE3
+// CID names the archive — an asset one.
+const MIRRORS = ['https://anymirror.dev/mirror/map-demo/'];
+
 function pageHintsDocument({ map, elevation, style }) {
+  const located = (path) => [path, ...MIRRORS.map((mirror) => `${mirror}${path}`)];
   return document({
-    [anchors.map]: ['map.pmtiles.proofs'],
-    [map]: ['map.pmtiles'],
-    [anchors.elevation]: ['elevation.pmtiles.proofs'],
-    [elevation]: ['elevation.pmtiles'],
-    [anchors.fonts]: ['assets/fonts.car'],
-    [anchors.sprites]: ['assets/sprites.car'],
-    [style]: ['assets/style.json'],
+    [anchors.map]: located('map.pmtiles.proofs'),
+    [map]: located('map.pmtiles'),
+    [anchors.elevation]: located('elevation.pmtiles.proofs'),
+    [elevation]: located('elevation.pmtiles'),
+    [anchors.fonts]: located('assets/fonts.car'),
+    [anchors.sprites]: located('assets/sprites.car'),
+    [style]: located('assets/style.json'),
   });
 }
 

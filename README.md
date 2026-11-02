@@ -51,7 +51,10 @@ different times:
 - **`hints.json`**, beside the page — the client's default document. Seven
   entries: each archive's anchor names its proof directory and its BLAKE3
   `map` CID names the archive, each bundle anchor names its proof, the style
-  CID names the style.
+  CID names the style. Each entry names this site's file first, then the
+  same file on [anymirror.dev](https://anymirror.dev/docs#mirror), which
+  mirrors the small set under the same CIDs: if one host fails, the client
+  reads from the other.
 - **`assets/hints.json`** — one entry per glyph, mapping each resource's raw
   CID to its published file. The page never names this document; the client
   discovers it by probing the directory that holds `fonts.car` when a glyph
